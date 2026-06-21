@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from 'react'
 import { changePassword as apiChangePassword, login as apiLogin, logout as apiLogout, me as apiMe, type MeResponse, type User } from '../api/auth'
+import type { PermMap } from '../lib/permissions'
 
 export type AuthStatus =
   | 'loading'
@@ -17,6 +18,7 @@ export type AuthStatus =
 
 type AuthContextValue = {
   me: User | null
+  permissions: PermMap | null
   status: AuthStatus
   login: (email: string, password: string, rememberMe: boolean) => Promise<void>
   logout: () => Promise<void>
@@ -28,11 +30,13 @@ const AuthContext = createContext<AuthContextValue | null>(null)
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [me, setMe] = useState<User | null>(null)
+  const [permissions, setPermissions] = useState<PermMap | null>(null)
   const [mustChange, setMustChange] = useState(false)
   const [status, setStatus] = useState<AuthStatus>('loading')
 
   const applyMe = useCallback((data: MeResponse) => {
     setMe(data.user)
+    setPermissions(data.permissions)
     setMustChange(data.must_change_password)
     setStatus(data.must_change_password ? 'must_change_password' : 'authenticated')
   }, [])
@@ -43,6 +47,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       applyMe(data)
     } catch {
       setMe(null)
+      setPermissions(null)
       setMustChange(false)
       setStatus('unauthenticated')
     }
@@ -55,6 +60,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const onLogout = () => {
       setMe(null)
+      setPermissions(null)
       setMustChange(false)
       setStatus('unauthenticated')
     }
@@ -67,6 +73,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const res = await apiLogin(email, password, rememberMe)
       if (res.must_change_password) {
         setMe(null)
+        setPermissions(null)
         setMustChange(true)
         setStatus('must_change_password')
         return
@@ -81,6 +88,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       await apiLogout()
     } finally {
       setMe(null)
+      setPermissions(null)
       setMustChange(false)
       setStatus('unauthenticated')
     }
@@ -95,8 +103,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   )
 
   const value = useMemo<AuthContextValue>(
-    () => ({ me, status, login, logout, changePassword, refresh }),
-    [me, status, login, logout, changePassword, refresh],
+    () => ({ me, permissions, status, login, logout, changePassword, refresh }),
+    [me, permissions, status, login, logout, changePassword, refresh],
   )
 
   // suppress unused-var for mustChange; kept on state for future UI hints

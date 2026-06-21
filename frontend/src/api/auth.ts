@@ -1,4 +1,5 @@
 import { apiFetch } from './client'
+import type { PermMap } from '../lib/permissions'
 
 export type User = {
   id: number
@@ -13,7 +14,7 @@ export type User = {
 
 export type MeResponse = {
   user: User
-  permissions: string[]
+  permissions: PermMap
   must_change_password: boolean
 }
 
