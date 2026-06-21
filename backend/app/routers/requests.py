@@ -16,7 +16,6 @@ from app.audit import apply_archive_filter, paginate, write_audit
 from app.db import get_db
 from app.dependencies import require_password_changed
 from app.models import (
-    Dict,
     ParentRequest,
     Procedure,
     ProcedurePosition,
@@ -641,8 +640,9 @@ def delete_position(
 #   - 409 if request.status != 'awaiting'
 #   - 409 if request already has procedures (cannot take twice)
 #   - creates Tender(parent_id, num=NULL)
-#   - creates Procedure(tender_id, block='zakupka', status_zakup from dict or
-#     literal 'Новая' fallback, block_entered_at=now ISO UTC)
+#   - creates Procedure(tender_id, block='zakupka',
+#     status_zakup='Новая' (служебное значение, ставится системой — НЕ из
+#     справочника, per docs/02-statuses.md §3), block_entered_at=now ISO UTC)
 #   - copies all RequestedPosition rows into ProcedurePosition with source_id
 #     pointing at the original requested_position row
 #   - audit 'take_to_work' on the parent_request
@@ -650,31 +650,6 @@ def delete_position(
 #
 # Side effect: the parent disappears from GET /requests (default view) because
 # the list filters out parents that already have tenders.
-
-def _resolve_initial_status_zakup(db: Session) -> str:
-    """Pick the initial status_zakup for a new procedure.
-
-    Prefer dict kind='status_zakup' value='Новая' if present. Otherwise the
-    first value with the minimum sort_order. Otherwise literal 'Новая'.
-    """
-    target = (
-        db.query(Dict)
-        .filter(Dict.kind == "status_zakup", Dict.value == "Новая")
-        .first()
-    )
-    if target is not None:
-        return target.value
-
-    first = (
-        db.query(Dict)
-        .filter(Dict.kind == "status_zakup")
-        .order_by(Dict.sort_order.asc(), Dict.id.asc())
-        .first()
-    )
-    if first is not None:
-        return first.value
-
-    return "Новая"
 
 
 @router.post(
@@ -717,14 +692,13 @@ def take_to_work(
     db.commit()
     db.refresh(tender)
 
-    # Resolve initial status_zakup from dict (with fallback).
-    initial_status = _resolve_initial_status_zakup(db)
-
-    # Create the procedure in block='zakupka'.
+    # Create the procedure in block='zakupka' with the system-set initial status.
+    # Per docs/02-statuses.md §3, 'Новая' is a service value set on block entry
+    # — it is NOT a справочник entry and must NOT appear in the user dropdown.
     procedure = Procedure(
         tender_id=tender.id,
         block="zakupka",
-        status_zakup=initial_status,
+        status_zakup="Новая",
         block_entered_at=datetime.now(timezone.utc).isoformat(),
     )
     db.add(procedure)

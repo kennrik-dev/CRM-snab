@@ -1181,7 +1181,7 @@ def test_take_to_work_parent_disappears_from_list(client_admin):
 
 
 def test_take_to_work_procedure_block_and_status(client_admin, db_seeded):
-    from app.models import Dict, Procedure
+    from app.models import Procedure
 
     body = _create_request_via_api(client_admin, code="TW-PROC", title="Проверка процедуры")
     r = client_admin.post(f"/requests/{body['id']}/take-to-work")
@@ -1192,27 +1192,9 @@ def test_take_to_work_procedure_block_and_status(client_admin, db_seeded):
     proc = db_seeded.get(Procedure, proc_id)
     assert proc is not None
     assert proc.block == "zakupka"
-    # status_zakup comes from dict kind='status_zakup'. The seeded dict has no
-    # 'Новая' value, so the endpoint falls back to the first value by
-    # sort_order ('Приём заявок' in the standard seed).
-    has_novaya = (
-        db_seeded.query(Dict)
-        .filter(Dict.kind == "status_zakup", Dict.value == "Новая")
-        .first()
-    )
-    if has_novaya is not None:
-        assert proc.status_zakup == "Новая"
-    else:
-        first = (
-            db_seeded.query(Dict)
-            .filter(Dict.kind == "status_zakup")
-            .order_by(Dict.sort_order.asc(), Dict.id.asc())
-            .first()
-        )
-        assert first is not None
-        assert proc.status_zakup == first.value
-        # And in the standard seed, that's 'Приём заявок' (sort_order=1).
-        assert proc.status_zakup == "Приём заявок"
+    # status_zakup is a system-set service value per docs/02-statuses.md §3 —
+    # always 'Новая' on block entry, NOT a справочник entry.
+    assert proc.status_zakup == "Новая"
 
 
 def test_take_to_work_positions_copied(client_admin, db_seeded):
