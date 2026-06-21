@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useCallback, useMemo, useState, type CSSProperties } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { ColumnDef } from '../components/types'
@@ -59,13 +59,24 @@ function toEditable(p: RequestPosition): EditableRow {
   }
 }
 
-const POSITION_COLUMNS: ColumnDef<EditableRow>[] = [
-  { key: 'name', header: 'Наименование', type: 'text', width: 'minmax(220px, 3fr)' },
-  { key: 'qty', header: 'Кол-во', type: 'number', width: 'minmax(90px, 1fr)', align: 'right' },
-  { key: 'unit', header: 'Ед. изм.', type: 'text', width: 'minmax(80px, 1fr)' },
-  { key: 'gost_tu', header: 'ГОСТ/ТУ', type: 'text', width: 'minmax(120px, 1fr)' },
-  { key: 'doc_code', header: 'Шифр документации', type: 'text', width: 'minmax(140px, 1fr)' },
+const POSITION_COLUMNS_BASE: Omit<ColumnDef<EditableRow>, 'render'>[] = [
+  { key: 'name', header: 'Наименование', type: 'text', width: 'minmax(180px, 3fr)' },
+  { key: 'qty', header: 'Кол-во', type: 'number', width: 'minmax(80px, 1fr)', align: 'right' },
+  { key: 'unit', header: 'Ед. изм.', type: 'text', width: 'minmax(70px, 1fr)' },
+  { key: 'gost_tu', header: 'ГОСТ/ТУ', type: 'text', width: 'minmax(90px, 1fr)' },
+  { key: 'doc_code', header: 'Шифр документации', type: 'text', width: 'minmax(110px, 1fr)' },
 ]
+
+const deleteBtnStyle: CSSProperties = {
+  background: 'transparent',
+  border: 0,
+  color: 'var(--late)',
+  cursor: 'pointer',
+  fontSize: 16,
+  padding: '0 4px',
+  lineHeight: 1,
+  borderRadius: 3,
+}
 
 // ---- Helpers --------------------------------------------------------------
 
@@ -169,6 +180,65 @@ export function RequestCard() {
     }
     setEditRows(next.length === 0 ? [makeLocalRow()] : next)
   }
+
+  // Per-row delete handler (from the trailing "×" column). Server rows are
+  // marked for deletion via `removedIds` and sent on save; local-only rows
+  // (no server id) are simply dropped from the edit array.
+  const onDeleteRow = useCallback((localId: string) => {
+    const cur = editRows ?? []
+    const target = cur.find((r) => r._localId === localId)
+    const targetId = target?.id
+    if (targetId !== undefined) {
+      setRemovedIds((ids) => [...ids, targetId])
+    }
+    const next = cur.filter((r) => r._localId !== localId)
+    setEditRows(next.length === 0 ? [makeLocalRow()] : next)
+  }, [editRows])
+
+  // ExcelTable columns — "№" + 5 fields + per-row delete. When the card is
+  // read-only (not awaiting, or user lacks edit rights) the column
+  // definitions are returned without the delete button.
+  // NOTE: declared before the render-section `isAwaiting` local below.
+  const positionColumns = useMemo<ColumnDef<EditableRow>[]>(() => {
+    const editable = canEditKomp && req?.status === 'awaiting'
+    const base: ColumnDef<EditableRow>[] = [
+      {
+        key: '_idx',
+        header: '№',
+        width: '40px',
+        editable: false,
+        align: 'center',
+        render: ({ rowIndex }) => <span className="num">{rowIndex + 1}</span>,
+      },
+      ...POSITION_COLUMNS_BASE.map(
+        (c) => ({ ...c, editable: true }) as ColumnDef<EditableRow>,
+      ),
+    ]
+    if (!editable) return base
+    return [
+      ...base,
+      {
+        key: '_del',
+        header: '',
+        width: '36px',
+        editable: false,
+        render: ({ row }) => (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              onDeleteRow(row._localId)
+            }}
+            title="Удалить позицию"
+            aria-label="Удалить позицию"
+            style={deleteBtnStyle}
+          >
+            ×
+          </button>
+        ),
+      },
+    ]
+  }, [canEditKomp, req?.status, onDeleteRow])
 
   async function savePositions() {
     if (!editRows) return
@@ -371,7 +441,7 @@ export function RequestCard() {
           </div>
           <ExcelTable<EditableRow>
             rows={editRows ?? req.positions.map(toEditable)}
-            columns={POSITION_COLUMNS}
+            columns={positionColumns}
             getRowId={(r) => r._localId}
             readOnly={!canEditKomp || !isAwaiting}
             onRowsChange={onRowsChange}

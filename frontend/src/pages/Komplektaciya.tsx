@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type CSSProperties } from 'react'
+import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { ColumnDef } from '../components/types'
@@ -137,13 +137,25 @@ function makeDraftRow(): DraftRow {
   }
 }
 
-const DRAFT_COLUMNS: ColumnDef<DraftRow>[] = [
-  { key: 'name', header: 'Наименование', type: 'text', width: 'minmax(220px, 3fr)' },
-  { key: 'qty', header: 'Кол-во', type: 'number', width: 'minmax(90px, 1fr)', align: 'right' },
-  { key: 'unit', header: 'Ед. изм.', type: 'text', width: 'minmax(80px, 1fr)' },
-  { key: 'gost_tu', header: 'ГОСТ/ТУ', type: 'text', width: 'minmax(120px, 1fr)' },
-  { key: 'doc_code', header: 'Шифр документации', type: 'text', width: 'minmax(140px, 1fr)' },
+const DRAFT_COLUMNS_BASE: Omit<ColumnDef<DraftRow>, 'render'>[] = [
+  { key: 'name', header: 'Наименование', type: 'text', width: 'minmax(180px, 3fr)' },
+  { key: 'qty', header: 'Кол-во', type: 'number', width: 'minmax(80px, 1fr)', align: 'right' },
+  { key: 'unit', header: 'Ед. изм.', type: 'text', width: 'minmax(70px, 1fr)' },
+  { key: 'gost_tu', header: 'ГОСТ/ТУ', type: 'text', width: 'minmax(90px, 1fr)' },
+  { key: 'doc_code', header: 'Шифр документации', type: 'text', width: 'minmax(110px, 1fr)' },
 ]
+
+// Visual style for the per-row delete button (rendered into the last column).
+const deleteBtnStyle: CSSProperties = {
+  background: 'transparent',
+  border: 0,
+  color: 'var(--late)',
+  cursor: 'pointer',
+  fontSize: 16,
+  padding: '0 4px',
+  lineHeight: 1,
+  borderRadius: 3,
+}
 
 const fieldStyle: CSSProperties = {
   display: 'flex',
@@ -227,6 +239,51 @@ function CreateRequestModal({
     }
     setRows(next)
   }
+
+  const onDeleteRow = useCallback((id: string) => {
+    setRows((prev) => {
+      const next = prev.filter((r) => r.id !== id)
+      return next.length === 0 ? [makeDraftRow()] : next
+    })
+  }, [])
+
+  // ExcelTable columns — composed with a leading "№" index column and a
+  // trailing per-row delete button. Defined inside the component so the
+  // delete handler can close over `onDeleteRow`.
+  const columns = useMemo<ColumnDef<DraftRow>[]>(
+    () => [
+      {
+        key: '_idx',
+        header: '№',
+        width: '40px',
+        editable: false,
+        align: 'center',
+        render: ({ rowIndex }) => <span className="num">{rowIndex + 1}</span>,
+      },
+      ...DRAFT_COLUMNS_BASE.map((c) => ({ ...c, editable: true }) as ColumnDef<DraftRow>),
+      {
+        key: '_del',
+        header: '',
+        width: '36px',
+        editable: false,
+        render: ({ row }) => (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              onDeleteRow(row.id)
+            }}
+            title="Удалить позицию"
+            aria-label="Удалить позицию"
+            style={deleteBtnStyle}
+          >
+            ×
+          </button>
+        ),
+      },
+    ],
+    [onDeleteRow],
+  )
 
   return (
     <Modal
@@ -332,7 +389,7 @@ function CreateRequestModal({
         <div style={labelStyle}>Позиции *</div>
         <ExcelTable
           rows={rows}
-          columns={DRAFT_COLUMNS}
+          columns={columns}
           getRowId={(r) => r.id}
           onRowsChange={onRowsChange}
           emptyMessage="Вставьте строки из Excel или добавьте вручную"

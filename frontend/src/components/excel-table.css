@@ -25,11 +25,14 @@
 
 .excel-table__grid {
   display: grid;
-  overflow: auto;
+  /* No horizontal scroll — let cells shrink to fit the container. */
+  overflow-x: hidden;
+  overflow-y: auto;
   max-height: 70vh;
   border: 1px solid #e2e2e2;
   border-radius: 6px;
   background: #fff;
+  min-width: 0;
 }
 
 /* Sticky header — keep it visible while the body scrolls. */
@@ -51,6 +54,12 @@
   border-right: 1px solid #f0f0f0;
   user-select: none;
   background: #f7f7f8;
+  /* Allow columns to shrink below their content size so the grid fits the
+     container. Text is still readable because cells have white-space:nowrap
+     and will truncate if too narrow. */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .excel-table__header:last-child {
@@ -71,6 +80,9 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  /* Allow the column to shrink below its min-content size (otherwise long
+     unbreakable text like "ШИФР ДОКУМЕНТАЦИИ" forces horizontal scroll). */
+  min-width: 0;
 }
 
 .excel-table__cell:last-child {
