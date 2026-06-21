@@ -236,6 +236,21 @@ function CreateRequestModal({
       width={760}
       footer={
         <>
+          {!canSubmit && !createMut.isPending && (
+            <span
+              style={{
+                fontSize: 11,
+                color: 'var(--muted)',
+                marginRight: 'auto',
+              }}
+            >
+              {code.trim() === ''
+                ? 'Заполните код'
+                : title.trim() === ''
+                  ? 'Заполните наименование'
+                  : 'Добавьте хотя бы одну позицию'}
+            </span>
+          )}
           <span className="sp" />
           <button className="btn ghost" onClick={onClose} disabled={createMut.isPending}>
             Отмена
@@ -244,6 +259,15 @@ function CreateRequestModal({
             className="btn primary"
             onClick={onSubmit}
             disabled={!canSubmit || createMut.isPending}
+            title={
+              !canSubmit
+                ? code.trim() === ''
+                  ? 'Заполните код'
+                  : title.trim() === ''
+                    ? 'Заполните наименование'
+                    : 'Добавьте хотя бы одну позицию'
+                : 'Сохранить заявку'
+            }
           >
             {createMut.isPending ? 'Сохранение…' : 'Сохранить'}
           </button>
@@ -313,8 +337,17 @@ function CreateRequestModal({
           onRowsChange={onRowsChange}
           emptyMessage="Вставьте строки из Excel или добавьте вручную"
         />
-        <div style={{ marginTop: 6, fontSize: 11, color: 'var(--muted)' }}>
-          Вставьте данные из Excel/Sheets (Ctrl+V) — колонки заполнятся автоматически.
+        <div
+          style={{
+            marginTop: 6,
+            fontSize: 11,
+            color: positions.length === 0 ? 'var(--late)' : 'var(--muted)',
+            fontWeight: positions.length === 0 ? 600 : 400,
+          }}
+        >
+          {positions.length === 0
+            ? 'Добавьте хотя бы одну позицию: заполните «Наименование» и «Кол-во» в строке выше или вставьте данные из Excel (Ctrl+V).'
+            : `Позиций заполнено: ${positions.length}. Вставьте данные из Excel/Sheets (Ctrl+V) — колонки заполнятся автоматически.`}
         </div>
       </div>
 
