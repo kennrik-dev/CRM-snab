@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>СНАБ · единое окно закупок — v5 (разнесённый)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Sans+Condensed:wght@600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="zakupki-crm.css">
+</head>
+<body>
+<div class="cmd">
+  <div class="mark"><div class="glyph"></div>СНАБ <small>единое окно</small></div>
+  <div class="search"><span class="mono">⌕</span><input placeholder="заявка Т-67, № 1488, поставщик, УПД…"></div>
+  <div class="spacer"></div>
+  <div class="role"><label>отдел</label>
+    <select id="roleSel" onchange="setRole(this.value)">
+      <option value="kompl">Комплектация</option><option value="zakup">Закупки</option>
+      <option value="soprov" selected>Сопровождение</option><option value="oplata">Оплата</option>
+    </select></div>
+  <div class="who"><div class="av" id="meAv">МК</div><div class="nm"><b id="meName">М. Котов</b><span id="meRole">Сопровождение</span></div></div>
+</div>
+<div class="tabs">
+  <button class="tab active" data-v="dash" onclick="go('dash')">Дашборд</button>
+  <button class="tab" data-v="kompl" onclick="go('kompl')">Комплектация <b id="cntKompl">—</b></button>
+  <button class="tab" data-v="zakup" onclick="go('zakup')">В закупке <b id="cntZakup">—</b></button>
+  <button class="tab" data-v="soprov" onclick="go('soprov')">В сопровождении <b id="cntSoprov">—</b></button>
+  <button class="tab" data-v="pay" onclick="go('pay')">Оплаты <b id="payCount">—</b></button>
+  <button class="tab" data-v="rep" onclick="go('rep')">Отчёты</button>
+</div>
+
+<!-- DASHBOARD -->
+<div class="view active" id="view-dash"><div class="wrap">
+  <div class="eyebrow" style="margin-bottom:10px">Показатели · реальное время</div>
+  <div class="meters" id="meters"></div>
+  <div class="eyebrow" style="margin:6px 0 10px">Поток по этапам</div>
+  <div class="flowrail" id="flowrail"></div>
+  <div class="grid2">
+    <div class="panel"><div class="phead"><h2>Требует внимания</h2><span class="cnt">4</span></div><div id="alerts"></div></div>
+    <div class="panel"><div class="phead"><h2>Лента событий</h2></div><div id="feed"></div></div>
+  </div>
+  <div class="eyebrow" style="margin:6px 0 10px">Заявки по этапам</div>
+  <div id="dashTables"></div>
+</div></div>
+
+<!-- KOMPLEKTACIYA -->
+<div class="view" id="view-kompl"><div class="wrap">
+  <div class="page-h"><h1>Комплектация</h1><span class="desc">заявки, загруженные комплектовщиками — ожидают закупки</span><span class="sp"></span></div>
+  <div id="komplTable"></div>
+</div></div>
+
+<!-- V ZAKUPKE -->
+<div class="view" id="view-zakup"><div class="wrap">
+  <div class="page-h"><h1>В закупке</h1><span class="desc">взяты в работу закупщиками · идут торги на ЭТП</span><span class="sp"></span></div>
+  <div id="zakupTable"></div>
+</div></div>
+
+<!-- V SOPROVOZHDENII -->
+<div class="view" id="view-soprov"><div class="wrap">
+  <div class="page-h"><h1>В сопровождении</h1><span class="desc">закупочная процедура завершена · контроль поставок и документов</span><span class="sp"></span></div>
+  <div id="soprovTable"></div>
+</div></div>
+
+<!-- CARD -->
+<div class="view" id="view-card"><div class="wrap">
+  <button class="back" id="cardBack" onclick="go(cardOrigin)">‹ Назад</button>
+  <div class="dcard" id="cardBody"></div>
+  <div class="foot">концепт v5 · данные демонстрационные</div>
+</div></div>
+
+<!-- PAYMENTS -->
+<div class="view" id="view-pay"><div class="wrap">
+  <div class="page-h"><h1>Оплаты</h1><span class="desc">реестр платежей по УПД</span><span class="sp"></span></div>
+  <div class="payhero" id="payhero"></div>
+  <div class="pbar" id="pbar"></div>
+  <div class="page-h" style="margin-bottom:10px"><h1 style="font-size:18px">Реестр платежей</h1><span class="sp"></span><span class="eyebrow" id="payRegSub"></span></div>
+  <div class="panel"><div class="tbl-scroll"><table class="utbl"><thead><tr>
+    <th>УПД</th><th>Заявка</th><th>Поставщик</th><th>Поставка</th><th>Статус</th><th class="r">Срок</th><th class="r">Сумма</th>
+  </tr></thead><tbody id="payBody"></tbody></table></div></div>
+</div></div>
+
+<!-- PAYMENT CARD -->
+<div class="view" id="view-paycard"><div class="wrap">
+  <button class="back" onclick="go('pay')">‹ Назад к платежам</button>
+  <div class="pcd" id="payCardBody"></div>
+  <div class="foot">концепт v5 · данные демонстрационные</div>
+</div></div>
+
+<!-- REPORTS -->
+<div class="view" id="view-rep"><div class="wrap">
+  <div class="page-h"><h1>Отчёты</h1><span class="desc">конструктор выгрузок для руководства</span><span class="sp"></span></div>
+  <div class="rep-layout">
+    <div class="rep-params">
+      <h3>Параметры</h3>
+      <div class="rep-group"><div class="rg-l">Тип отчёта</div><div id="repTypes"></div></div>
+      <div class="rep-group"><div class="rg-l">Период</div>
+        <select class="rep-sel"><option>Текущий месяц</option><option>Квартал</option><option>С начала года</option><option>Произвольный…</option></select></div>
+      <div class="rep-group"><div class="rg-l">Фильтры</div>
+        <select class="rep-sel"><option>Все типы МТР</option><option>Трубная продукция</option><option>КИПиА</option></select>
+        <select class="rep-sel"><option>Все поставщики</option><option>ООО «ТехСнаб»</option></select>
+        <select class="rep-sel"><option>Все составители</option><option>А. Орлова</option><option>В. Седов</option></select>
+      </div>
+      <button class="rep-go" onclick="runReport()">Сформировать</button>
+    </div>
+    <div class="rep-out" id="repOut"></div>
+  </div>
+</div></div>
+
+<script src="zakupki-crm.js"></script>
+</body>
+</html>
