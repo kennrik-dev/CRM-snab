@@ -1023,3 +1023,311 @@ def test_delete_position_as_zakup_emp_403(client_seeded, db_seeded):
 
     r = client_seeded.delete(f"/requests/{pr.id}/positions/{pos.id}")
     assert r.status_code == 403
+
+
+# ===========================================================================
+# Phase 4.2 — POST /requests/{id}/take-to-work
+# ===========================================================================
+#
+# Requires «Закупки edit» (admin / Закупки-сотрудник / Закупки-куратор).
+# The action:
+#   - 404 if request not found
+#   - 409 if status != 'awaiting'
+#   - 409 if request already has procedures (cannot «взять в работу» twice)
+#   - creates one Tender (parent_id=req.id, num=NULL)
+#   - creates one Procedure (block='zakupka', status_zakup from dict or fallback)
+#   - copies all RequestedPosition → ProcedurePosition with source_id
+#   - block_entered_at = ISO datetime
+#   - audit 'take_to_work' on the parent_request
+#   - returns {tender_id, procedure_id}
+#
+# Side effect: the parent disappears from GET /requests (default view), because
+#   the list filters out parents that already have tenders.
+
+
+@pytest.fixture()
+def client_kompl_emp(client_seeded, db_seeded):
+    """TestClient logged in as a Комплектация employee (no zakupka edit)."""
+    u = _make_kompl_emp(db_seeded)
+    _login_as(client_seeded, u.email, "userpass123")
+    return client_seeded
+
+
+def test_take_to_work_as_admin_200(client_admin):
+    body = _create_request_via_api(
+        client_admin,
+        code="TW-1",
+        title="Взять в работу",
+        positions=[
+            {"name": "Болт", "qty": 10.0, "unit": "шт"},
+            {"name": "Гайка", "qty": 5.0, "unit": "шт"},
+        ],
+    )
+    req_id = body["id"]
+
+    r = client_admin.post(f"/requests/{req_id}/take-to-work")
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert isinstance(data["tender_id"], int) and data["tender_id"] > 0
+    assert isinstance(data["procedure_id"], int) and data["procedure_id"] > 0
+
+
+def test_take_to_work_as_zakup_emp_200(client_seeded, db_seeded, client_admin):
+    """A Закупки employee (not admin, but Закупки department) also has edit.
+
+    The request itself is created via the admin client (since creating a
+    request requires komplektaciya edit). Then we log in as the Закупки
+    employee in client_seeded and call take-to-work.
+    """
+    # Create the request as admin (separate client to keep session clean).
+    body = _create_request_via_api(
+        client_admin,
+        code="TW-ZE",
+        title="Закупщик берёт",
+        positions=[{"name": "Болт", "qty": 1.0}],
+    )
+    req_id = body["id"]
+
+    # Now log in as Закупки employee in client_seeded.
+    u = _make_zakup_emp(db_seeded)
+    _login_as(client_seeded, u.email, "userpass123")
+
+    r = client_seeded.post(f"/requests/{req_id}/take-to-work")
+    assert r.status_code == 200, r.text
+    assert r.json()["tender_id"] > 0
+    assert r.json()["procedure_id"] > 0
+
+
+def test_take_to_work_request_not_found_404(client_admin):
+    r = client_admin.post("/requests/99999/take-to-work")
+    assert r.status_code == 404
+
+
+def test_take_to_work_as_kompl_emp_403(client_kompl_emp, db_seeded):
+    """Комплектация employee has NO zakupka edit → 403."""
+    # Create a request via DB to bypass komplektaciya edit guard.
+    from app.models import ParentRequest
+    pr = ParentRequest(
+        code="TW-K",
+        title="Test",
+        sostavitel="X",
+        status="awaiting",
+    )
+    db_seeded.add(pr)
+    db_seeded.commit()
+    db_seeded.refresh(pr)
+
+    r = client_kompl_emp.post(f"/requests/{pr.id}/take-to-work")
+    assert r.status_code == 403
+
+
+def test_take_to_work_unauthenticated_401(client_seeded):
+    # No login performed.
+    r = client_seeded.post("/requests/1/take-to-work")
+    assert r.status_code == 401
+
+
+def test_take_to_work_must_change_password_403(client_seeded, db_seeded):
+    u = _make_kompl_emp_with_must_change(db_seeded)
+    _login_as(client_seeded, u.email, "userpass123")
+
+    r = client_seeded.post("/requests/1/take-to-work")
+    assert r.status_code == 403
+
+
+def test_take_to_work_cancelled_409(client_admin):
+    body = _create_request_via_api(client_admin, code="TW-CXL", title="Отменённая")
+    client_admin.post(f"/requests/{body['id']}/cancel")
+
+    r = client_admin.post(f"/requests/{body['id']}/take-to-work")
+    assert r.status_code == 409
+
+
+def test_take_to_work_already_has_procedures_409(client_admin, db_seeded):
+    body = _create_request_via_api(
+        client_admin,
+        code="TW-DUP",
+        title="Двойной take",
+        positions=[{"name": "Болт", "qty": 1.0}],
+    )
+
+    r1 = client_admin.post(f"/requests/{body['id']}/take-to-work")
+    assert r1.status_code == 200, r1.text
+
+    r2 = client_admin.post(f"/requests/{body['id']}/take-to-work")
+    assert r2.status_code == 409
+
+
+def test_take_to_work_parent_disappears_from_list(client_admin):
+    body = _create_request_via_api(
+        client_admin,
+        code="TW-LIST",
+        title="Должен исчезнуть",
+        positions=[{"name": "Болт", "qty": 1.0}],
+    )
+
+    # Before: appears in list
+    r0 = client_admin.get("/requests")
+    codes0 = {it["code"] for it in r0.json()["items"]}
+    assert "TW-LIST" in codes0
+
+    r1 = client_admin.post(f"/requests/{body['id']}/take-to-work")
+    assert r1.status_code == 200
+
+    # After: gone from default list (because it now has a tender)
+    r2 = client_admin.get("/requests")
+    codes2 = {it["code"] for it in r2.json()["items"]}
+    assert "TW-LIST" not in codes2
+
+
+def test_take_to_work_procedure_block_and_status(client_admin, db_seeded):
+    from app.models import Dict, Procedure
+
+    body = _create_request_via_api(client_admin, code="TW-PROC", title="Проверка процедуры")
+    r = client_admin.post(f"/requests/{body['id']}/take-to-work")
+    assert r.status_code == 200, r.text
+    proc_id = r.json()["procedure_id"]
+
+    db_seeded.expire_all()
+    proc = db_seeded.get(Procedure, proc_id)
+    assert proc is not None
+    assert proc.block == "zakupka"
+    # status_zakup comes from dict kind='status_zakup'. The seeded dict has no
+    # 'Новая' value, so the endpoint falls back to the first value by
+    # sort_order ('Приём заявок' in the standard seed).
+    has_novaya = (
+        db_seeded.query(Dict)
+        .filter(Dict.kind == "status_zakup", Dict.value == "Новая")
+        .first()
+    )
+    if has_novaya is not None:
+        assert proc.status_zakup == "Новая"
+    else:
+        first = (
+            db_seeded.query(Dict)
+            .filter(Dict.kind == "status_zakup")
+            .order_by(Dict.sort_order.asc(), Dict.id.asc())
+            .first()
+        )
+        assert first is not None
+        assert proc.status_zakup == first.value
+        # And in the standard seed, that's 'Приём заявок' (sort_order=1).
+        assert proc.status_zakup == "Приём заявок"
+
+
+def test_take_to_work_positions_copied(client_admin, db_seeded):
+    from app.models import Procedure, ProcedurePosition, RequestedPosition, Tender
+
+    body = _create_request_via_api(
+        client_admin,
+        code="TW-POS",
+        title="Копирование позиций",
+        positions=[
+            {"name": "Болт М12", "qty": 10.0, "unit": "шт", "gost_tu": "ГОСТ 7798", "doc_code": "D-1"},
+            {"name": "Гайка М12", "qty": 20.0, "unit": "шт", "gost_tu": "ГОСТ 5915", "doc_code": "D-2"},
+            {"name": "Шайба", "qty": 30.0, "unit": "шт"},
+        ],
+    )
+    req_id = body["id"]
+
+    # Capture original requested_position ids
+    db_seeded.expire_all()
+    src_positions = (
+        db_seeded.query(RequestedPosition)
+        .filter(RequestedPosition.parent_id == req_id)
+        .order_by(RequestedPosition.id.asc())
+        .all()
+    )
+    assert len(src_positions) == 3
+    src_ids = [p.id for p in src_positions]
+    src_by_id = {p.id: p for p in src_positions}
+
+    r = client_admin.post(f"/requests/{req_id}/take-to-work")
+    assert r.status_code == 200, r.text
+    tender_id = r.json()["tender_id"]
+    proc_id = r.json()["procedure_id"]
+
+    db_seeded.expire_all()
+    tender = db_seeded.get(Tender, tender_id)
+    assert tender.parent_id == req_id
+    assert tender.num is None  # num=NULL is fine at this phase
+
+    copied = (
+        db_seeded.query(ProcedurePosition)
+        .filter(ProcedurePosition.procedure_id == proc_id)
+        .order_by(ProcedurePosition.id.asc())
+        .all()
+    )
+    assert len(copied) == 3
+
+    # All source_ids should be set and match one of the original requested_position ids.
+    src_id_set = set(src_ids)
+    for cp in copied:
+        assert cp.source_id in src_id_set
+        # Name/qty/unit/gost_tu/doc_code should match the source row.
+        src = src_by_id[cp.source_id]
+        assert cp.name == src.name
+        assert cp.qty == src.qty
+        assert cp.unit == src.unit
+        assert cp.gost_tu == src.gost_tu
+        assert cp.doc_code == src.doc_code
+
+
+def test_take_to_work_block_entered_at_set(client_admin, db_seeded):
+    from app.models import Procedure
+
+    body = _create_request_via_api(client_admin, code="TW-TS", title="Timestamp")
+    r = client_admin.post(f"/requests/{body['id']}/take-to-work")
+    assert r.status_code == 200
+    proc_id = r.json()["procedure_id"]
+
+    db_seeded.expire_all()
+    proc = db_seeded.get(Procedure, proc_id)
+    assert proc is not None
+    assert proc.block_entered_at is not None
+    # Should be parseable as ISO datetime
+    from datetime import datetime
+    parsed = datetime.fromisoformat(proc.block_entered_at)
+    assert parsed is not None
+
+
+def test_take_to_work_audit_written(client_admin, db_seeded):
+    from app.models import AuditLog
+
+    body = _create_request_via_api(client_admin, code="TW-AUD", title="Аудит")
+    r = client_admin.post(f"/requests/{body['id']}/take-to-work")
+    assert r.status_code == 200
+
+    db_seeded.expire_all()
+    rows = (
+        db_seeded.query(AuditLog)
+        .filter_by(
+            entity_kind="parent_request",
+            entity_id=body["id"],
+            action="take_to_work",
+        )
+        .all()
+    )
+    assert len(rows) == 1
+    assert rows[0].user_id is not None
+
+
+def test_take_to_work_include_archived_still_shows_request(client_admin):
+    """After take-to-work the request status is still 'awaiting' (it is
+    cancelled vs awaiting, not 'with/without procedures'). So
+    include_archived=1 should still return it."""
+    body = _create_request_via_api(
+        client_admin,
+        code="TW-ARCH",
+        title="Архив + take",
+        positions=[{"name": "Болт", "qty": 1.0}],
+    )
+    r1 = client_admin.post(f"/requests/{body['id']}/take-to-work")
+    assert r1.status_code == 200
+
+    r2 = client_admin.get("/requests?include_archived=1")
+    codes = {it["code"] for it in r2.json()["items"]}
+    assert "TW-ARCH" in codes
+    # status is still 'awaiting'
+    target = next(it for it in r2.json()["items"] if it["id"] == body["id"])
+    assert target["status"] == "awaiting"

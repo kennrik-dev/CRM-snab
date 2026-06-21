@@ -1,10 +1,11 @@
 """/requests router: parent_request CRUD + positions (mass insert supported).
 
 Phase 4.1 — locked spec from `docs/31-api.md` §2 and `docs/02-statuses.md` §7.1.
+Phase 4.2 — adds POST /requests/{id}/take-to-work (Закупки only).
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -15,7 +16,10 @@ from app.audit import apply_archive_filter, paginate, write_audit
 from app.db import get_db
 from app.dependencies import require_password_changed
 from app.models import (
+    Dict,
     ParentRequest,
+    Procedure,
+    ProcedurePosition,
     RequestedPosition,
     Tender,
     User,
@@ -32,6 +36,7 @@ from app.schemas.requests import (
     RequestPatch,
     RequestPositionIn,
     RequestPositionPatch,
+    TakeToWorkResponse,
     TenderOut,
 )
 
@@ -623,3 +628,141 @@ def delete_position(
         action="position_delete",
     )
     return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# POST /requests/{id}/take-to-work — «Взять в работу» (Закупки only)
+# ---------------------------------------------------------------------------
+#
+# Phase 4.2 — locked spec from `docs/31-api.md` §2 (take-to-work block).
+#
+# Behavior:
+#   - 404 if request not found
+#   - 409 if request.status != 'awaiting'
+#   - 409 if request already has procedures (cannot take twice)
+#   - creates Tender(parent_id, num=NULL)
+#   - creates Procedure(tender_id, block='zakupka', status_zakup from dict or
+#     literal 'Новая' fallback, block_entered_at=now ISO UTC)
+#   - copies all RequestedPosition rows into ProcedurePosition with source_id
+#     pointing at the original requested_position row
+#   - audit 'take_to_work' on the parent_request
+#   - returns {tender_id, procedure_id}
+#
+# Side effect: the parent disappears from GET /requests (default view) because
+# the list filters out parents that already have tenders.
+
+def _resolve_initial_status_zakup(db: Session) -> str:
+    """Pick the initial status_zakup for a new procedure.
+
+    Prefer dict kind='status_zakup' value='Новая' if present. Otherwise the
+    first value with the minimum sort_order. Otherwise literal 'Новая'.
+    """
+    target = (
+        db.query(Dict)
+        .filter(Dict.kind == "status_zakup", Dict.value == "Новая")
+        .first()
+    )
+    if target is not None:
+        return target.value
+
+    first = (
+        db.query(Dict)
+        .filter(Dict.kind == "status_zakup")
+        .order_by(Dict.sort_order.asc(), Dict.id.asc())
+        .first()
+    )
+    if first is not None:
+        return first.value
+
+    return "Новая"
+
+
+@router.post(
+    "/{request_id}/take-to-work",
+    response_model=TakeToWorkResponse,
+)
+def take_to_work(
+    request_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_action("zakupka", "edit")),
+) -> TakeToWorkResponse:
+    parent = db.get(ParentRequest, request_id)
+    if parent is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="request not found",
+        )
+
+    if parent.status != "awaiting":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="request is not awaiting",
+        )
+
+    # 409 if already has procedures (cannot take to work twice)
+    has_tenders = (
+        db.query(Tender)
+        .filter(Tender.parent_id == parent.id)
+        .first()
+    )
+    if has_tenders is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="request already taken to work",
+        )
+
+    # Create the tender (num=NULL is allowed at this phase).
+    tender = Tender(parent_id=parent.id, num=None)
+    db.add(tender)
+    db.commit()
+    db.refresh(tender)
+
+    # Resolve initial status_zakup from dict (with fallback).
+    initial_status = _resolve_initial_status_zakup(db)
+
+    # Create the procedure in block='zakupka'.
+    procedure = Procedure(
+        tender_id=tender.id,
+        block="zakupka",
+        status_zakup=initial_status,
+        block_entered_at=datetime.now(timezone.utc).isoformat(),
+    )
+    db.add(procedure)
+    db.commit()
+    db.refresh(procedure)
+
+    # Copy RequestedPosition rows into ProcedurePosition with source_id.
+    src_positions = (
+        db.query(RequestedPosition)
+        .filter(RequestedPosition.parent_id == parent.id)
+        .order_by(RequestedPosition.id.asc())
+        .all()
+    )
+    for p in src_positions:
+        db.add(
+            ProcedurePosition(
+                procedure_id=procedure.id,
+                source_id=p.id,
+                name=p.name,
+                qty=p.qty,
+                unit=p.unit,
+                gost_tu=p.gost_tu,
+                doc_code=p.doc_code,
+            )
+        )
+    if src_positions:
+        db.commit()
+
+    # Audit on the parent_request.
+    write_audit(
+        db,
+        entity_kind="parent_request",
+        entity_id=parent.id,
+        user=current_user,
+        action="take_to_work",
+    )
+
+    return TakeToWorkResponse(
+        tender_id=tender.id,
+        procedure_id=procedure.id,
+    )

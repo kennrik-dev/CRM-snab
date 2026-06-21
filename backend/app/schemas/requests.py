@@ -146,6 +146,16 @@ class PaginatedRequests(BaseModel):
     total: int
 
 
+# ---------------------------------------------------------------------------
+# Take-to-work response (Phase 4.2)
+# ---------------------------------------------------------------------------
+
+class TakeToWorkResponse(BaseModel):
+    """Response shape for POST /requests/{id}/take-to-work."""
+    tender_id: int
+    procedure_id: int
+
+
 __all__ = [
     "RequestPositionIn",
     "RequestPositionPatch",
@@ -158,4 +168,5 @@ __all__ = [
     "RequestOut",
     "RequestListItem",
     "PaginatedRequests",
+    "TakeToWorkResponse",
 ]
