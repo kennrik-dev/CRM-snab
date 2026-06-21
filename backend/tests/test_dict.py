@@ -10,7 +10,7 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.db import Base, get_db
+from app.db import Base, get_db, register_sqlite_setup
 from app.main import app
 from app.security import hash_password
 
@@ -34,10 +34,8 @@ def db_seeded():
     )
 
     @event.listens_for(engine, "connect")
-    def _fk_pragma_on_connect(dbapi_conn, _):
-        cur = dbapi_conn.cursor()
-        cur.execute("PRAGMA foreign_keys=ON")
-        cur.close()
+    def _setup(dbapi_conn, _):
+        register_sqlite_setup(dbapi_conn, _)
 
     Base.metadata.create_all(engine)
     SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)

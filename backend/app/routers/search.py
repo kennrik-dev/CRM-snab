@@ -11,6 +11,10 @@ Returns JSON grouped by entity type:
   "procedures": [{"id": int, "proc": str|null, "supplier": str|null, "tender_id": int}],
   "suppliers":  [{"id": int, "name": str, "proc_count": int}]
 }
+
+Matching is case-insensitive (Unicode-aware) — uses the `py_casefold` SQL
+function registered in `app.db` (Python's str.casefold handles Cyrillic,
+which SQLite's built-in LOWER() does not).
 """
 from __future__ import annotations
 
@@ -38,24 +42,27 @@ def global_search(
     if not q_stripped:
         return empty
 
-    like = f"%{q_stripped}%"
+    # Casefold once in Python; py_casefold is applied to the column in SQL.
+    # Both sides end up in the same canonical form, so instr() can do a
+    # plain substring search. (LIKE would also work but requires escaping
+    # % and _ in q; instr() sidesteps that.)
+    q_cf = q_stripped.casefold()
 
     # ------------------------------------------------------------------
-    # parents — match code OR title
+    # parents — match code OR title (case-insensitive Unicode)
     # ------------------------------------------------------------------
+    code_match = func.instr(func.py_casefold(ParentRequest.code), q_cf) > 0
+    title_match = func.instr(func.py_casefold(ParentRequest.title), q_cf) > 0
     parents = (
         db.query(ParentRequest.id, ParentRequest.code, ParentRequest.title)
-        .filter(
-            ParentRequest.code.ilike(like)
-            | ParentRequest.title.ilike(like)
-        )
+        .filter(code_match | title_match)
         .order_by(ParentRequest.created_at.desc())
         .limit(limit)
         .all()
     )
 
     # ------------------------------------------------------------------
-    # procedures — proc IS NOT NULL AND proc ILIKE %q%
+    # procedures — proc IS NOT NULL AND proc matches (case-insensitive Unicode)
     # ------------------------------------------------------------------
     procedures = (
         db.query(
@@ -65,14 +72,14 @@ def global_search(
             Procedure.tender_id,
         )
         .filter(Procedure.proc.isnot(None))
-        .filter(Procedure.proc.ilike(like))
+        .filter(func.instr(func.py_casefold(Procedure.proc), q_cf) > 0)
         .order_by(Procedure.created_at.desc())
         .limit(limit)
         .all()
     )
 
     # ------------------------------------------------------------------
-    # suppliers — distinct suppliers whose name ILIKE %q%, with proc_count
+    # suppliers — distinct suppliers whose name matches (case-insensitive Unicode)
     # Excludes NULL suppliers. Ordered by proc_count DESC, name ASC.
     # `id` is the min(procedure.id) for the group — a stable representative.
     # ------------------------------------------------------------------
@@ -83,7 +90,7 @@ def global_search(
             func.count(Procedure.id).label("proc_count"),
         )
         .filter(Procedure.supplier.isnot(None))
-        .filter(Procedure.supplier.ilike(like))
+        .filter(func.instr(func.py_casefold(Procedure.supplier), q_cf) > 0)
         .group_by(Procedure.supplier)
         .order_by(func.count(Procedure.id).desc(), Procedure.supplier.asc())
         .limit(limit)

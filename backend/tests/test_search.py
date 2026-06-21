@@ -19,7 +19,7 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.db import Base, get_db
+from app.db import Base, get_db, register_sqlite_setup
 from app.main import app
 from app.security import hash_password
 from app.models import ParentRequest, Procedure, Tender, User
@@ -43,10 +43,8 @@ def db_seeded():
     )
 
     @event.listens_for(engine, "connect")
-    def _fk_pragma_on_connect(dbapi_conn, _):
-        cur = dbapi_conn.cursor()
-        cur.execute("PRAGMA foreign_keys=ON")
-        cur.close()
+    def _setup(dbapi_conn, _):
+        register_sqlite_setup(dbapi_conn, _)
 
     Base.metadata.create_all(engine)
     SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
@@ -218,14 +216,64 @@ def test_search_parent_code_match(client_admin, db_seeded):
 def test_search_parent_title_match(client_admin, db_seeded):
     _make_parent(db_seeded, code="P-1", title="Клапаны запорные")
 
-    # Use same case as data — SQLite+SQLAlchemy ilike handles same-case
-    # Cyrillic substring, but case-mixed Cyrillic is out of scope for SQLite
-    # without a custom collation.
     r = client_admin.get("/search?q=Клапаны")
     assert r.status_code == 200, r.text
     body = r.json()
     assert len(body["parents"]) == 1
     assert body["parents"][0]["code"] == "P-1"
+
+
+def test_search_parent_title_match_case_insensitive_cyrillic(client_admin, db_seeded):
+    """py_casefold must make Cyrillic search case-insensitive."""
+    _make_parent(db_seeded, code="P-1", title="Клапаны запорные")
+
+    # Same word, but lowercase. SQLite's built-in LOWER() doesn't lowercase
+    # Cyrillic; py_casefold (str.casefold) does — so this must match.
+    r = client_admin.get("/search?q=клапаны")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert len(body["parents"]) == 1
+    assert body["parents"][0]["code"] == "P-1"
+
+
+def test_search_parent_code_match_case_insensitive_cyrillic(client_admin, db_seeded):
+    """Cyrillic code search is case-insensitive too."""
+    _make_parent(db_seeded, code="Т-67", title="Заголовок")
+
+    # Type in lowercase, code is uppercase.
+    r = client_admin.get("/search?q=т-67")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert len(body["parents"]) == 1
+    assert body["parents"][0]["code"] == "Т-67"
+
+
+def test_search_supplier_match_case_insensitive_cyrillic(client_admin, db_seeded):
+    """Supplier search is case-insensitive (Cyrillic)."""
+    parent = _make_parent(db_seeded, code="S-1", title="S")
+    tender = _make_tender(db_seeded, num="S-1", parent_id=parent.id)
+    _make_procedure(db_seeded, tender_id=tender.id, proc="P-A", supplier="ООО Ромашка Плюс")
+
+    # Type lowercase, supplier is mixed case.
+    r = client_admin.get("/search?q=ромашка")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert len(body["suppliers"]) == 1
+    assert body["suppliers"][0]["name"] == "ООО Ромашка Плюс"
+
+
+def test_search_procedure_proc_match_case_insensitive_cyrillic(client_admin, db_seeded):
+    """Procedure.proc search is case-insensitive (Cyrillic)."""
+    parent = _make_parent(db_seeded, code="X-1", title="X")
+    tender = _make_tender(db_seeded, num="X-1", parent_id=parent.id)
+    _make_procedure(db_seeded, tender_id=tender.id, proc="ПР-001")
+
+    # Type lowercase, data is uppercase.
+    r = client_admin.get("/search?q=пр")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert len(body["procedures"]) == 1
+    assert body["procedures"][0]["proc"] == "ПР-001"
 
 
 # ---------------------------------------------------------------------------
