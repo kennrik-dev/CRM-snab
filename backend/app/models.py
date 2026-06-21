@@ -377,7 +377,7 @@ class Dict(Base):
     kind: Mapped[str] = mapped_column(Text, nullable=False)
     value: Mapped[str] = mapped_column(Text, nullable=False)
     sort_order: Mapped[Optional[int]] = mapped_column(
-        Integer, nullable=True, server_default=sql_text("0")
+        Integer, nullable=True
     )
 
     __table_args__ = (
