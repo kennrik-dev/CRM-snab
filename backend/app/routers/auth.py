@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.dependencies import get_current_user, get_current_user_no_refresh
 from app.models import User
+from app.permissions import permissions_map
 from app.schemas.auth import (
     ChangePasswordRequest,
     LoginRequest,
@@ -99,8 +100,7 @@ def me(
     current_user: User = Depends(get_current_user),
 ) -> MeResponse:
     # Allowed even when must_change_password=1 (so the client can detect the flag).
-    # Phase 3 will fill the real permissions map; for now, placeholder.
-    permissions = {"_placeholder": {"view": True, "edit": False}}
+    permissions = permissions_map(current_user)
     return MeResponse(
         user=UserOut.model_validate(current_user),
         permissions=permissions,
