@@ -44,6 +44,6 @@ export function me(): Promise<MeResponse> {
 export function changePassword(current: string, newPass: string): Promise<void> {
   return apiFetch<void>('/auth/change-password', {
     method: 'POST',
-    body: { current_password: current, new_password: newPass },
+    body: { current, new: newPass },
   })
 }

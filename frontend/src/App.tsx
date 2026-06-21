@@ -4,7 +4,7 @@ import { Tabs } from './components/Tabs'
 import { AuthProvider, useAuth } from './auth/AuthContext'
 import { Login } from './auth/Login'
 import { ChangePassword } from './auth/ChangePassword'
-import { RequireAuth, RequireNoAuth } from './auth/Guards'
+import { RequireAuth, RequireAuthOrChange, RequireNoAuth } from './auth/Guards'
 
 function PlaceholderPage({ title }: { title: string }) {
   return (
@@ -54,9 +54,9 @@ function Router() {
       <Route
         path="/change-password"
         element={
-          <RequireAuth>
+          <RequireAuthOrChange>
             <ChangePassword />
-          </RequireAuth>
+          </RequireAuthOrChange>
         }
       />
       <Route
