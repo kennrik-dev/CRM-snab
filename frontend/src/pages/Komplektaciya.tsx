@@ -1,11 +1,10 @@
 import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import type { ColumnDef } from '../components/types'
 import { Chip } from '../components/Chip'
 import { DataTable, type DataTableColumn } from '../components/DataTable'
 import { EmptyState } from '../components/EmptyState'
-import { ExcelTable } from '../components/ExcelTable'
+import { PositionTable, type PositionTableColumn } from '../components/PositionTable'
 import { FilterBar } from '../components/FilterBar'
 import { Modal } from '../components/Modal'
 import {
@@ -137,26 +136,6 @@ function makeDraftRow(): DraftRow {
   }
 }
 
-const DRAFT_COLUMNS_BASE: Omit<ColumnDef<DraftRow>, 'render'>[] = [
-  { key: 'name', header: 'Наименование', type: 'text', width: 'minmax(180px, 3fr)' },
-  { key: 'qty', header: 'Кол-во', type: 'number', width: 'minmax(80px, 1fr)', align: 'right' },
-  { key: 'unit', header: 'Ед. изм.', type: 'text', width: 'minmax(70px, 1fr)' },
-  { key: 'gost_tu', header: 'ГОСТ/ТУ', type: 'text', width: 'minmax(90px, 1fr)' },
-  { key: 'doc_code', header: 'Шифр документации', type: 'text', width: 'minmax(110px, 1fr)' },
-]
-
-// Visual style for the per-row delete button (rendered into the last column).
-const deleteBtnStyle: CSSProperties = {
-  background: 'transparent',
-  border: 0,
-  color: 'var(--late)',
-  cursor: 'pointer',
-  fontSize: 16,
-  padding: '0 4px',
-  lineHeight: 1,
-  borderRadius: 3,
-}
-
 const fieldStyle: CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
@@ -232,57 +211,55 @@ function CreateRequestModal({
     })
   }
 
-  function onRowsChange(next: DraftRow[]) {
-    if (next.length === 0) {
-      setRows([makeDraftRow()])
-      return
-    }
-    setRows(next)
-  }
+  // PositionTable wiring — controlled by the parent state. The delete handler
+  // removes the row by id, and `onAddRows` is called when the user pastes
+  // more TSV rows than the table currently has.
+  const onCellChange = useCallback(
+    (rowId: string | number, key: string, value: string | null) => {
+      setRows((prev) =>
+        prev.map((r) =>
+          r.id === rowId
+            ? { ...r, [key]: value === null || value === '' ? null : value }
+            : r,
+        ),
+      )
+    },
+    [],
+  )
 
-  const onDeleteRow = useCallback((id: string) => {
+  const onDeleteRow = useCallback((rowId: string | number) => {
     setRows((prev) => {
-      const next = prev.filter((r) => r.id !== id)
+      const next = prev.filter((r) => r.id !== rowId)
       return next.length === 0 ? [makeDraftRow()] : next
     })
   }, [])
 
-  // ExcelTable columns — composed with a leading "№" index column and a
-  // trailing per-row delete button. Defined inside the component so the
-  // delete handler can close over `onDeleteRow`.
-  const columns = useMemo<ColumnDef<DraftRow>[]>(
+  const onAddRows = useCallback(
+    (afterRowId: string | number | null, count: number) => {
+      setRows((prev) => {
+        const idx =
+          afterRowId === null
+            ? prev.length
+            : prev.findIndex((r) => r.id === afterRowId)
+        const insertAt = idx === -1 ? prev.length : idx + 1
+        const fresh = Array.from({ length: count }, () => makeDraftRow())
+        return [...prev.slice(0, insertAt), ...fresh, ...prev.slice(insertAt)]
+      })
+    },
+    [],
+  )
+
+  // PositionTable columns — explicit widths so the table never overflows.
+  // Total: 40 (#) + 220 + 90 + 70 + 100 + 130 + 40 (×) = 690 ≤ 724 (modal body).
+  const draftColumns = useMemo<PositionTableColumn<DraftRow>[]>(
     () => [
-      {
-        key: '_idx',
-        header: '№',
-        width: '40px',
-        editable: false,
-        align: 'center',
-        render: ({ rowIndex }) => <span className="num">{rowIndex + 1}</span>,
-      },
-      ...DRAFT_COLUMNS_BASE.map((c) => ({ ...c, editable: true }) as ColumnDef<DraftRow>),
-      {
-        key: '_del',
-        header: '',
-        width: '36px',
-        editable: false,
-        render: ({ row }) => (
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation()
-              onDeleteRow(row.id)
-            }}
-            title="Удалить позицию"
-            aria-label="Удалить позицию"
-            style={deleteBtnStyle}
-          >
-            ×
-          </button>
-        ),
-      },
+      { key: 'name', header: 'Наименование', width: 'minmax(140px, 1fr)' },
+      { key: 'qty', header: 'Кол-во', width: '90px', align: 'right', mono: true },
+      { key: 'unit', header: 'Ед. изм.', width: '70px', mono: true },
+      { key: 'gost_tu', header: 'ГОСТ/ТУ', width: '100px' },
+      { key: 'doc_code', header: 'Шифр документации', width: '130px' },
     ],
-    [onDeleteRow],
+    [],
   )
 
   return (
@@ -387,12 +364,14 @@ function CreateRequestModal({
 
       <div style={{ marginTop: 16 }}>
         <div style={labelStyle}>Позиции *</div>
-        <ExcelTable
+        <PositionTable
           rows={rows}
-          columns={columns}
+          columns={draftColumns}
           getRowId={(r) => r.id}
-          onRowsChange={onRowsChange}
-          emptyMessage="Вставьте строки из Excel или добавьте вручную"
+          onCellChange={onCellChange}
+          onDeleteRow={onDeleteRow}
+          onAddRows={onAddRows}
+          emptyMessage="Вставьте строки из Excel (Ctrl+V) или введите данные вручную"
         />
         <div
           style={{

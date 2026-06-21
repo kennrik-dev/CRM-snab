@@ -1,10 +1,9 @@
-import { useCallback, useMemo, useState, type CSSProperties } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import type { ColumnDef } from '../components/types'
 import { Chip } from '../components/Chip'
 import { EmptyState } from '../components/EmptyState'
-import { ExcelTable } from '../components/ExcelTable'
+import { PositionTable, type PositionTableColumn } from '../components/PositionTable'
 import { useAuth } from '../auth/AuthContext'
 import {
   addPositions,
@@ -57,25 +56,6 @@ function toEditable(p: RequestPosition): EditableRow {
     gost_tu: p.gost_tu,
     doc_code: p.doc_code,
   }
-}
-
-const POSITION_COLUMNS_BASE: Omit<ColumnDef<EditableRow>, 'render'>[] = [
-  { key: 'name', header: 'Наименование', type: 'text', width: 'minmax(180px, 3fr)' },
-  { key: 'qty', header: 'Кол-во', type: 'number', width: 'minmax(80px, 1fr)', align: 'right' },
-  { key: 'unit', header: 'Ед. изм.', type: 'text', width: 'minmax(70px, 1fr)' },
-  { key: 'gost_tu', header: 'ГОСТ/ТУ', type: 'text', width: 'minmax(90px, 1fr)' },
-  { key: 'doc_code', header: 'Шифр документации', type: 'text', width: 'minmax(110px, 1fr)' },
-]
-
-const deleteBtnStyle: CSSProperties = {
-  background: 'transparent',
-  border: 0,
-  color: 'var(--late)',
-  cursor: 'pointer',
-  fontSize: 16,
-  padding: '0 4px',
-  lineHeight: 1,
-  borderRadius: 3,
 }
 
 // ---- Helpers --------------------------------------------------------------
@@ -163,82 +143,67 @@ export function RequestCard() {
 
   // ---- Position editing --------------------------------------------------
 
-  function onRowsChange(next: EditableRow[]) {
-    // Detect deletions vs server rows (had id, no longer present)
-    const beforeIds = new Set(
-      (editRows ?? []).map((r) => r.id).filter((x): x is number => x !== undefined),
-    )
-    const afterIds = new Set(
-      next.map((r) => r.id).filter((x): x is number => x !== undefined),
-    )
-    const newlyRemoved: number[] = []
-    beforeIds.forEach((id) => {
-      if (!afterIds.has(id)) newlyRemoved.push(id)
-    })
-    if (newlyRemoved.length > 0) {
-      setRemovedIds((prev) => [...prev, ...newlyRemoved])
-    }
-    setEditRows(next.length === 0 ? [makeLocalRow()] : next)
-  }
+  // PositionTable wiring — controlled by the parent editRows state. The
+  // delete handler routes server rows through `removedIds` so they get
+  // DELETEd on save, and drops local-only rows.
+  const onCellChange = useCallback(
+    (rowId: string | number, key: string, value: string | null) => {
+      setEditRows((prev) => {
+        const cur = prev ?? []
+        return cur.map((r) =>
+          r._localId === rowId
+            ? { ...r, [key]: value === null || value === '' ? null : value }
+            : r,
+        )
+      })
+    },
+    [],
+  )
 
-  // Per-row delete handler (from the trailing "×" column). Server rows are
-  // marked for deletion via `removedIds` and sent on save; local-only rows
-  // (no server id) are simply dropped from the edit array.
-  const onDeleteRow = useCallback((localId: string) => {
-    const cur = editRows ?? []
-    const target = cur.find((r) => r._localId === localId)
-    const targetId = target?.id
-    if (targetId !== undefined) {
-      setRemovedIds((ids) => [...ids, targetId])
-    }
-    const next = cur.filter((r) => r._localId !== localId)
-    setEditRows(next.length === 0 ? [makeLocalRow()] : next)
-  }, [editRows])
+  const onDeleteRow = useCallback(
+    (rowId: string | number) => {
+      setEditRows((prev) => {
+        const cur = prev ?? []
+        const target = cur.find((r) => r._localId === rowId)
+        const targetId = target?.id
+        if (targetId !== undefined) {
+          setRemovedIds((ids) => [...ids, targetId])
+        }
+        const next = cur.filter((r) => r._localId !== rowId)
+        return next.length === 0 ? [makeLocalRow()] : next
+      })
+    },
+    [],
+  )
 
-  // ExcelTable columns — "№" + 5 fields + per-row delete. When the card is
-  // read-only (not awaiting, or user lacks edit rights) the column
-  // definitions are returned without the delete button.
-  // NOTE: declared before the render-section `isAwaiting` local below.
-  const positionColumns = useMemo<ColumnDef<EditableRow>[]>(() => {
-    const editable = canEditKomp && req?.status === 'awaiting'
-    const base: ColumnDef<EditableRow>[] = [
-      {
-        key: '_idx',
-        header: '№',
-        width: '40px',
-        editable: false,
-        align: 'center',
-        render: ({ rowIndex }) => <span className="num">{rowIndex + 1}</span>,
-      },
-      ...POSITION_COLUMNS_BASE.map(
-        (c) => ({ ...c, editable: true }) as ColumnDef<EditableRow>,
-      ),
-    ]
-    if (!editable) return base
-    return [
-      ...base,
-      {
-        key: '_del',
-        header: '',
-        width: '36px',
-        editable: false,
-        render: ({ row }) => (
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation()
-              onDeleteRow(row._localId)
-            }}
-            title="Удалить позицию"
-            aria-label="Удалить позицию"
-            style={deleteBtnStyle}
-          >
-            ×
-          </button>
-        ),
-      },
-    ]
-  }, [canEditKomp, req?.status, onDeleteRow])
+  const onAddRows = useCallback(
+    (afterRowId: string | number | null, count: number) => {
+      setEditRows((prev) => {
+        const cur = prev ?? []
+        const idx =
+          afterRowId === null
+            ? cur.length
+            : cur.findIndex((r) => r._localId === afterRowId)
+        const insertAt = idx === -1 ? cur.length : idx + 1
+        const fresh = Array.from({ length: count }, () => makeLocalRow())
+        return [...cur.slice(0, insertAt), ...fresh, ...cur.slice(insertAt)]
+      })
+    },
+    [],
+  )
+
+  // PositionTable column definitions. Widths sum to ~1080 (the .dcard
+  // max-width minus padding) so the table never horizontal-scrolls.
+  const positionColumns = useMemo<PositionTableColumn<EditableRow>[]>(
+    () => [
+      { key: 'name', header: 'Наименование', width: 'minmax(180px, 1fr)' },
+      { key: 'qty', header: 'Кол-во', width: '90px', align: 'right', mono: true },
+      { key: 'unit', header: 'Ед. изм.', width: '80px', mono: true },
+      { key: 'gost_tu', header: 'ГОСТ/ТУ', width: '140px' },
+      { key: 'doc_code', header: 'Шифр документации', width: '180px' },
+    ],
+    [],
+  )
 
   async function savePositions() {
     if (!editRows) return
@@ -439,12 +404,14 @@ export function RequestCard() {
           >
             Позиции
           </div>
-          <ExcelTable<EditableRow>
+          <PositionTable<EditableRow>
             rows={editRows ?? req.positions.map(toEditable)}
             columns={positionColumns}
             getRowId={(r) => r._localId}
+            onCellChange={onCellChange}
+            onDeleteRow={onDeleteRow}
+            onAddRows={onAddRows}
             readOnly={!canEditKomp || !isAwaiting}
-            onRowsChange={onRowsChange}
             emptyMessage="Нет позиций"
           />
         </div>
