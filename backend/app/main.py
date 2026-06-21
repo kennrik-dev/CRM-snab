@@ -1,12 +1,13 @@
 from fastapi import FastAPI
 
-from app.routers import auth, dict, search, users
+from app.routers import auth, dict, requests, search, users
 
 app = FastAPI(title="CRM Ultima")
 app.include_router(auth.router)
 app.include_router(dict.router)
 app.include_router(users.router)
 app.include_router(search.router)
+app.include_router(requests.router)
 
 
 @app.get("/health")
