@@ -1,10 +1,13 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { CommandBar } from './components/CommandBar'
 import { Tabs } from './components/Tabs'
 import { AuthProvider, useAuth } from './auth/AuthContext'
 import { Login } from './auth/Login'
 import { ChangePassword } from './auth/ChangePassword'
 import { RequireAuth, RequireAuthOrChange, RequireNoAuth } from './auth/Guards'
+import { Komplektaciya } from './pages/Komplektaciya'
+import { RequestCard } from './cards/RequestCard'
 
 function PlaceholderPage({ title }: { title: string }) {
   return (
@@ -24,7 +27,8 @@ function AppShell() {
       <Routes>
         <Route path="/" element={<Navigate to="/dashboard" replace />} />
         <Route path="/dashboard" element={<PlaceholderPage title="Дашборд" />} />
-        <Route path="/komplektaciya" element={<PlaceholderPage title="Комплектация" />} />
+        <Route path="/komplektaciya" element={<Komplektaciya />} />
+        <Route path="/komplektaciya/:id" element={<RequestCard />} />
         <Route path="/zakupka" element={<PlaceholderPage title="В закупке" />} />
         <Route path="/soprovozhdenie" element={<PlaceholderPage title="В сопровождении" />} />
         <Route path="/oplaty" element={<PlaceholderPage title="Оплаты" />} />
@@ -71,13 +75,24 @@ function Router() {
   )
 }
 
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      retry: false,
+      refetchOnWindowFocus: false,
+    },
+  },
+})
+
 function App() {
   return (
-    <BrowserRouter>
-      <AuthProvider>
-        <Router />
-      </AuthProvider>
-    </BrowserRouter>
+    <QueryClientProvider client={queryClient}>
+      <BrowserRouter>
+        <AuthProvider>
+          <Router />
+        </AuthProvider>
+      </BrowserRouter>
+    </QueryClientProvider>
   )
 }
 
