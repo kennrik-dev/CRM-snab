@@ -43,3 +43,11 @@ Thumbs.db
 .claude/worktrees/
 .claude/settings.local.json
 .claude/scheduled_tasks.json
+
+# Playwright MCP test artifacts (in project root)
+.playwright-mcp/
+/phase-0-*.png
+/concept-*.png
+/page-*.png
+/role-*.png
+/visual-*.png
