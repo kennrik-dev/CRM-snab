@@ -87,7 +87,6 @@ export function RequestCard() {
 
   const req = query.data
 
-  const [removedIds, setRemovedIds] = useState<number[]>([])
   const [editRows, setEditRows] = useState<EditableRow[] | null>(null)
   const [actionErr, setActionErr] = useState<string | null>(null)
 
@@ -107,7 +106,6 @@ export function RequestCard() {
     // data. (Same pattern as CreateRequestModal's onSuccess.)
     await qc.refetchQueries({ queryKey: ['request', requestId] })
     qc.invalidateQueries({ queryKey: ['requests'] })
-    setRemovedIds([])
     setEditRows(null)
   }
 
@@ -152,9 +150,9 @@ export function RequestCard() {
 
   // ---- Position editing --------------------------------------------------
 
-  // PositionTable wiring — controlled by the parent editRows state. The
-  // delete handler routes server rows through `removedIds` so they get
-  // DELETEd on save, and drops local-only rows.
+  // PositionTable wiring — controlled by the parent editRows state. Deleted
+  // rows are dropped from editRows; savePositions diff editRows vs the server
+  // positions to issue the DELETEs.
   const onCellChange = useCallback(
     (rowId: string | number, key: string, value: string | null) => {
       setEditRows((prev) => {
@@ -171,13 +169,13 @@ export function RequestCard() {
 
   const onDeleteRow = useCallback(
     (rowId: string | number) => {
+      // Removed positions are detected at save time by diffing editRows
+      // against the server data — no incremental tracking here. (A prior
+      // setRemovedIds call inside this updater was a side effect that React
+      // StrictMode double-invoked, duplicating the id and causing a second
+      // DELETE → 404 "position not found".)
       setEditRows((prev) => {
         const cur = prev ?? []
-        const target = cur.find((r) => r._localId === rowId)
-        const targetId = target?.id
-        if (targetId !== undefined) {
-          setRemovedIds((ids) => [...ids, targetId])
-        }
         const next = cur.filter((r) => r._localId !== rowId)
         return next.length === 0 ? [makeLocalRow()] : next
       })
@@ -264,9 +262,16 @@ export function RequestCard() {
       if (newRows.length > 0) {
         await addPositions(requestId, newRows)
       }
-      // 3. Delete rows the user removed.
-      for (const id of removedIds) {
-        await deletePosition(requestId, id)
+      // 3. Delete positions removed by the user — derived by diffing the
+      // current editRows against the original server positions (not a tracked
+      // list, which duplicated under StrictMode).
+      const currentIds = new Set(
+        editRows.filter((r) => r.id !== undefined).map((r) => r.id as number),
+      )
+      for (const p of original) {
+        if (!currentIds.has(p.id)) {
+          await deletePosition(requestId, p.id)
+        }
       }
       refresh()
     } catch (err) {

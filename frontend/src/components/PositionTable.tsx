@@ -265,6 +265,12 @@ export function PositionTable<T>({
             !e.metaKey &&
             !e.altKey
           ) {
+            // Don't hijack typing into a live input (the «№» cell's own
+            // <input>) — let it handle the character natively. Otherwise the
+            // first keystroke is swallowed (preventDefault here) while trying
+            // to enter edit mode for a column that has no edit mode.
+            const tgt = e.target as HTMLElement
+            if (tgt.tagName === 'INPUT' || tgt.tagName === 'TEXTAREA') break
             if (!isReadOnlyCol(active.col, columns, readOnly)) {
               e.preventDefault()
               setEditing(active)
