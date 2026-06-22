@@ -97,8 +97,14 @@ export function RequestCard() {
     setEditRows(req.positions.map(toEditable))
   }
 
-  function refresh() {
-    qc.invalidateQueries({ queryKey: ['request', requestId] })
+  async function refresh() {
+    // Await the card refetch BEFORE resetting editRows. editRows is re-seeded
+    // during render from query.data; if we only invalidate, query.data is
+    // still the PRE-save snapshot at re-seed time, so editRows gets seeded
+    // with stale values and the next save REVERTS the position (oscillation /
+    // "values change on save"). Awaiting guarantees the re-seed reads fresh
+    // data. (Same pattern as CreateRequestModal's onSuccess.)
+    await qc.refetchQueries({ queryKey: ['request', requestId] })
     qc.invalidateQueries({ queryKey: ['requests'] })
     setRemovedIds([])
     setEditRows(null)

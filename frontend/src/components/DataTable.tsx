@@ -5,6 +5,12 @@ export type DataTableColumn<T> = {
   header: string
   render?: (row: T) => ReactNode
   align?: 'left' | 'right' | 'center'
+  // CSS width for the column (e.g. '30%', '120px'). When at least one column
+  // specifies a width, the table switches to `table-layout: fixed` and a
+  // <colgroup> is rendered so column widths become STATIC — they no longer
+  // shift when row content changes (e.g. toggling "Показать отменённые").
+  // Leave undefined for content-driven layout (the legacy behaviour).
+  width?: string
 }
 
 export function DataTable<T>({
@@ -22,11 +28,20 @@ export function DataTable<T>({
   empty?: ReactNode
   className?: string
 }) {
-  const tableCls = `reg ${className ?? ''}`.trim()
+  const hasFixedLayout = columns.some((c) => c.width !== undefined)
+  const tableCls = `reg ${hasFixedLayout ? 'fixed ' : ''}${className ?? ''}`.trim()
+  const colgroup = hasFixedLayout ? (
+    <colgroup>
+      {columns.map((c) => (
+        <col key={c.key} style={c.width ? { width: c.width } : undefined} />
+      ))}
+    </colgroup>
+  ) : null
 
   if (rows.length === 0 && empty !== undefined) {
     return (
       <table className={tableCls}>
+        {colgroup}
         <thead>
           <tr>
             {columns.map((c) => (
@@ -49,6 +64,7 @@ export function DataTable<T>({
 
   return (
     <table className={tableCls}>
+      {colgroup}
       <thead>
         <tr>
           {columns.map((c) => (

@@ -54,16 +54,22 @@ function useDebounced<T>(value: T, delay: number): T {
 type NumberedRow = RequestListItem & { _idx: number }
 
 function buildColumns(): DataTableColumn<NumberedRow>[] {
+  // Widths sum to 100% so the table fills `.tbl-scroll` and every column
+  // keeps a STATIC width — rows no longer "dance" when long-text content
+  // (e.g. after toggling "Показать отменённые") changes. The wide
+  // "Наименование" column absorbs wrapping (table-layout: fixed + wrap).
   return [
     {
       key: '_idx',
       header: '#',
       align: 'center',
+      width: '4%',
       render: (row) => <span className="num">{row._idx + 1}</span>,
     },
     {
       key: 'codeTitle',
       header: 'Наименование',
+      width: '30%',
       render: (row) => (
         <>
           <span className="parent-tag">{row.code}</span>
@@ -74,32 +80,38 @@ function buildColumns(): DataTableColumn<NumberedRow>[] {
     {
       key: 'mtr',
       header: 'Тип МТР',
+      width: '11%',
       render: (row) => row.mtr ?? '—',
     },
     {
       key: 'srok',
       header: 'Срок',
+      width: '11%',
       render: (row) => <span className="dt">{dateRu(row.srok)}</span>,
     },
     {
       key: 'zagruzka',
       header: 'Дата загрузки',
+      width: '11%',
       render: (row) => <span className="dt">{dateRu(row.zagruzka)}</span>,
     },
     {
       key: 'sostavitel',
       header: 'Составитель',
+      width: '15%',
       render: (row) => row.sostavitel,
     },
     {
       key: 'position_count',
       header: 'Поз.',
       align: 'center',
+      width: '6%',
       render: (row) => <span className="posc">{row.position_count}</span>,
     },
     {
       key: 'status',
       header: 'Статус',
+      width: '12%',
       render: (row) => (
         <Chip
           kind={row.status === 'cancelled' ? 'cancel' : 'wait'}

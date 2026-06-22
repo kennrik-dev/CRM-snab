@@ -105,6 +105,12 @@ table.reg{width:100%;border-collapse:collapse;min-width:760px}
 .reg tr:last-child td{border-bottom:none}
 .reg tbody tr{cursor:pointer}.reg tbody tr:hover td{background:var(--hov)}
 .reg .num{font-family:var(--mono);color:var(--faint);font-size:12px}
+/* Fixed-layout variant: column widths come from <colgroup>, so they are
+   STATIC and do not shift when row content changes. Long text wraps instead
+   of forcing the column wider (cf. the legacy .reg, which is nowrap and
+   content-driven). Apply by giving a DataTable column a `width`. */
+table.reg.fixed{table-layout:fixed}
+.reg.fixed td{white-space:normal;word-break:break-word}
 .zaglink{font-family:var(--mono);font-weight:600;font-size:13px}
 .parent-tag{display:inline-block;font-family:var(--mono);font-size:10px;font-weight:600;color:var(--muted);background:var(--surface-2);border:1px solid var(--line);padding:1px 7px;border-radius:4px;margin-right:7px}
 .zname{font-weight:500;font-size:13px}.zname small{display:block;color:var(--muted);font-size:11px;font-weight:400}
