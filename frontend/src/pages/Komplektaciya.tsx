@@ -244,16 +244,26 @@ function CreateRequestModal({
   }, [])
 
   const onAddRows = useCallback(
-    (afterRowId: string | number | null, count: number) => {
+    (afterRowId: string | number | null, count: number): string[] => {
+      // Build the new rows synchronously so we can return their ids. The
+      // same array is then spliced into setRows' functional update — no
+      // double-makeDraftRow, no race with the re-render.
+      const fresh: DraftRow[] = []
+      const newIds: string[] = []
+      for (let i = 0; i < count; i++) {
+        const newRow = makeDraftRow()
+        fresh.push(newRow)
+        newIds.push(newRow.id)
+      }
       setRows((prev) => {
         const idx =
           afterRowId === null
             ? prev.length
             : prev.findIndex((r) => r.id === afterRowId)
         const insertAt = idx === -1 ? prev.length : idx + 1
-        const fresh = Array.from({ length: count }, () => makeDraftRow())
         return [...prev.slice(0, insertAt), ...fresh, ...prev.slice(insertAt)]
       })
+      return newIds
     },
     [],
   )

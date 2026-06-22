@@ -9,14 +9,20 @@
  *   - клик → выбор ячейки; F2 или начало ввода → редактирование;
  *     Enter / Tab → коммит + переход; Esc → отмена.
  *
+ * Внутренняя индексация столбцов (active.col):
+ *   0   →  «№» (виртуальная колонка, читает/пишет row.num)
+ *   1.. →  columns[active.col - 1] (настоящие данные)
+ *
  * API:
  *   rows           — текущие строки
  *   columns        — определения колонок (key, header, width, mono, readOnly)
  *   getRowId       — стабильный id строки
  *   onCellChange   — (rowId, key, value) обновление одной ячейки
  *   onDeleteRow    — (rowId) удаление строки (×)
- *   onAddRows      — (afterRowId | null, count) добавление N пустых строк
- *                    (вызывается при paste, если строк не хватает)
+ *   onAddRows      — (afterRowId | null, count) → string[] — добавление
+ *                    N пустых строк. Должен ВЕРНУТЬ id добавленных строк
+ *                    (paste использует их, чтобы записать значения
+ *                    синхронно, до ре-рендера).
  *   readOnly       — запретить всё редактирование
  *   showRowNumber  — добавить колонку «№» слева (ручной ввод)
  *   emptyMessage   — текст, когда строк 0
@@ -44,21 +50,17 @@ export type PositionTableColumn<T> = {
   readOnly?: boolean
 }
 
-/**
- * The `num` field on rows is optional and read/written via the leading «№»
- * column. To keep the component generic, callers can pass any row shape —
- * the «№» cell uses a runtime check (`num` in row) rather than a TS
- * constraint. The field is treated as UI metadata; the parent's
- * `onCellChange` decides whether to forward it to the server.
- */
 type Props<T> = {
   rows: T[]
   columns: PositionTableColumn<T>[]
   getRowId: (row: T) => string | number
   onCellChange: (rowId: string | number, key: string, value: string | null) => void
   onDeleteRow: (rowId: string | number) => void
-  /** Called when paste needs more rows than the current array has. */
-  onAddRows?: (afterRowId: string | number | null, count: number) => void
+  /**
+   * Called when paste needs more rows than the current array has.
+   * Must return the ids of the newly-created rows in order.
+   */
+  onAddRows?: (afterRowId: string | number | null, count: number) => (string | number)[]
   readOnly?: boolean
   showRowNumber?: boolean
   emptyMessage?: string
@@ -84,6 +86,7 @@ const rowNumberCellStyle: CSSProperties = {
   fontFamily: 'var(--mono)',
   fontSize: 12,
   color: 'var(--faint)',
+  cursor: 'cell',
 }
 
 const rowNumberInputStyle: CSSProperties = {
@@ -99,6 +102,21 @@ const rowNumberInputStyle: CSSProperties = {
   padding: '9px 4px',
 }
 
+const NUM_KEY = 'num' as keyof unknown
+
+// Translate display col → underlying data key (returns 'num' for col 0).
+function colToKey<T>(col: number, columns: PositionTableColumn<T>[]): string | null {
+  if (col === 0) return NUM_KEY as string
+  const dataCol = columns[col - 1]
+  return dataCol ? dataCol.key : null
+}
+
+function isReadOnlyCol<T>(col: number, columns: PositionTableColumn<T>[], readOnly: boolean): boolean {
+  if (readOnly) return true
+  if (col === 0) return false
+  return columns[col - 1]?.readOnly ?? true
+}
+
 export function PositionTable<T>({
   rows,
   columns,
@@ -110,10 +128,9 @@ export function PositionTable<T>({
   showRowNumber = true,
   emptyMessage = 'Нет позиций',
 }: Props<T>) {
-  // Offset of the data columns inside the table — accounts for the optional
-  // leading "№" column.
-  const dataColOffset = showRowNumber ? 1 : 0
-  const totalCols = columns.length + dataColOffset + 1 // + delete column
+  // Total number of "logical" columns (data + optional № + delete).
+  // The delete column is the last (handled separately in the render).
+  const totalLogicalCols = columns.length + (showRowNumber ? 1 : 0)
 
   const [active, setActive] = useState<CellPos | null>(null)
   const [editing, setEditing] = useState<CellPos | null>(null)
@@ -121,7 +138,6 @@ export function PositionTable<T>({
   const tableRef = useRef<HTMLTableElement | null>(null)
   const inputRef = useRef<HTMLInputElement | null>(null)
 
-  // Focus the editor when we enter edit mode.
   useEffect(() => {
     if (editing && inputRef.current) {
       inputRef.current.focus()
@@ -145,11 +161,11 @@ export function PositionTable<T>({
       setEditing(null)
       return
     }
-    const col = columns[editing.col]
-    if (col) {
-      const current = getCellValue(row, col.key)
+    const key = colToKey(editing.col, columns)
+    if (key) {
+      const current = getCellValue(row, key as keyof T & string)
       if (editValue !== current) {
-        onCellChange(getRowId(row), col.key, editValue === '' ? null : editValue)
+        onCellChange(getRowId(row), key, editValue === '' ? null : editValue)
       }
     }
     setEditing(null)
@@ -163,13 +179,14 @@ export function PositionTable<T>({
   const startEdit = useCallback(
     (pos: CellPos) => {
       if (readOnly) return
+      if (isReadOnlyCol(pos.col, columns, readOnly)) return
       const row = rows[pos.row]
       if (!row) return
-      const col = columns[pos.col]
-      if (!col || col.readOnly) return
+      const key = colToKey(pos.col, columns)
+      if (!key) return
       setActive(pos)
       setEditing(pos)
-      setEditValue(getCellValue(row, col.key))
+      setEditValue(getCellValue(row, key as keyof T & string))
     },
     [readOnly, rows, columns, getCellValue],
   )
@@ -178,13 +195,10 @@ export function PositionTable<T>({
     (dr: number, dc: number) => {
       if (!active) return
       const newRow = Math.max(0, Math.min(rows.length - 1, active.row + dr))
-      const newCol = Math.max(
-        0,
-        Math.min(columns.length - 1, active.col + dc),
-      )
+      const newCol = Math.max(0, Math.min(totalLogicalCols - 1, active.col + dc))
       setActive({ row: newRow, col: newCol })
     },
-    [active, rows.length, columns.length],
+    [active, rows.length, totalLogicalCols],
   )
 
   const handleKeyDown = useCallback(
@@ -235,10 +249,11 @@ export function PositionTable<T>({
           if (readOnly) return
           const row = rows[active.row]
           if (!row) return
-          const col = columns[active.col]
-          if (!col || col.readOnly) return
+          if (isReadOnlyCol(active.col, columns, readOnly)) return
+          const key = colToKey(active.col, columns)
+          if (!key) return
           e.preventDefault()
-          onCellChange(getRowId(row), col.key, null)
+          onCellChange(getRowId(row), key, null)
           break
         }
         default:
@@ -250,8 +265,7 @@ export function PositionTable<T>({
             !e.metaKey &&
             !e.altKey
           ) {
-            const col = columns[active.col]
-            if (col && !col.readOnly) {
+            if (!isReadOnlyCol(active.col, columns, readOnly)) {
               e.preventDefault()
               setEditing(active)
               setEditValue(e.key)
@@ -280,10 +294,17 @@ export function PositionTable<T>({
       if (readOnly || !active) return
       const text = e.clipboardData.getData('text/plain')
       if (!text) return
-      // Skip the paste if the focus is actually on an input/textarea — let
-      // the browser handle native paste in that case.
+      // Only skip paste when the focus is on a non-numeric INPUT (e.g. a
+      // future textarea). The «№» cell's own input has inputMode="numeric"
+      // and is our target — let the table handle paste there too.
       const target = e.target as HTMLElement
-      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return
+      if (target.tagName === 'TEXTAREA') return
+      if (
+        target.tagName === 'INPUT' &&
+        (target as HTMLInputElement).inputMode !== 'numeric'
+      ) {
+        return
+      }
 
       e.preventDefault()
       const lines = text.replace(/\r\n?/g, '\n').split('\n').filter((l) => l.length > 0)
@@ -294,40 +315,41 @@ export function PositionTable<T>({
       const startCol = active.col
       const neededRows = startRow + rows2d.length
 
-      // Grow the table if paste needs more rows.
+      // Grow the table first. The parent must return the new rowIds so we
+      // can write to them synchronously (the parent re-renders AFTER this
+      // handler returns, so we can't read the new rows from a ref).
+      let newRowIds: (string | number)[] = []
       if (neededRows > rows.length && onAddRows) {
         const afterId =
           rows.length > 0 ? getRowId(rows[rows.length - 1]) : null
-        onAddRows(afterId, neededRows - rows.length)
+        newRowIds = onAddRows(afterId, neededRows - rows.length)
       }
 
-      // For each (r, c) in the pasted range, set the value.
-      // We schedule this on the next microtask so the state from onAddRows
-      // (if any) has been applied before we read rows for writing.
-      queueMicrotask(() => {
-        for (let r = 0; r < rows2d.length; r++) {
-          const targetRowIdx = startRow + r
-          const targetRow = rowsRef.current[targetRowIdx]
-          if (!targetRow) continue
-          const rowId = getRowId(targetRow)
-          for (let c = 0; c < rows2d[r].length; c++) {
-            const targetColIdx = startCol + c
-            const col = columns[targetColIdx]
-            if (!col || col.readOnly) continue
-            onCellChange(rowId, col.key, rows2d[r][c] === '' ? null : rows2d[r][c])
-          }
+      for (let r = 0; r < rows2d.length; r++) {
+        const targetRowIdx = startRow + r
+        // Resolve the row id: existing row or one of the newly-added rows.
+        let rowId: string | number
+        if (targetRowIdx < rows.length) {
+          rowId = getRowId(rows[targetRowIdx])
+        } else {
+          const newIdx = targetRowIdx - rows.length
+          const newId = newRowIds[newIdx]
+          if (newId === undefined) continue
+          rowId = newId
         }
-      })
+
+        for (let c = 0; c < rows2d[r].length; c++) {
+          const targetCol = startCol + c
+          if (isReadOnlyCol(targetCol, columns, readOnly)) continue
+          const key = colToKey(targetCol, columns)
+          if (!key) continue
+          const value = rows2d[r][c]
+          onCellChange(rowId, key, value === '' ? null : value)
+        }
+      }
     },
     [readOnly, active, rows, columns, onAddRows, onCellChange, getRowId],
   )
-
-  // Keep a live ref to rows so the microtask in handlePaste reads the
-  // post-grow array (parent re-renders before microtask runs).
-  const rowsRef = useRef(rows)
-  useEffect(() => {
-    rowsRef.current = rows
-  }, [rows])
 
   const onCellClick = useCallback(
     (rowIdx: number, colIdx: number) => {
@@ -349,7 +371,7 @@ export function PositionTable<T>({
       <table className="postbl">
         <tbody>
           <tr>
-            <td colSpan={totalCols} style={{ textAlign: 'center', color: 'var(--muted)' }}>
+            <td colSpan={totalLogicalCols + 1} style={{ textAlign: 'center', color: 'var(--muted)' }}>
               {emptyMessage}
             </td>
           </tr>
@@ -406,18 +428,21 @@ export function PositionTable<T>({
             return (
               <tr key={rowId}>
                 {showRowNumber && (
-                  <td style={rowNumberCellStyle}>
+                  <td
+                    style={rowNumberCellStyle}
+                    onClick={() => onCellClick(ri, 0)}
+                  >
                     {readOnly ? (
-                      <span>{getCellValue(row, 'num' as keyof T & string) || '—'}</span>
+                      <span>{getCellValue(row, NUM_KEY as keyof T & string) || '—'}</span>
                     ) : (
                       <input
                         type="text"
                         inputMode="numeric"
-                        value={getCellValue(row, 'num' as keyof T & string)}
+                        value={getCellValue(row, NUM_KEY as keyof T & string)}
                         onChange={(e) =>
-                          onCellChange(rowId, 'num' as keyof T & string, e.target.value)
+                          onCellChange(rowId, NUM_KEY as keyof T & string, e.target.value)
                         }
-                        onClick={(e) => e.stopPropagation()}
+                        onFocus={() => onCellClick(ri, 0)}
                         placeholder="—"
                         style={rowNumberInputStyle}
                       />
@@ -425,8 +450,11 @@ export function PositionTable<T>({
                   </td>
                 )}
                 {columns.map((c, ci) => {
-                  const isActive = active?.row === ri && active?.col === ci
-                  const isEditing = editing?.row === ri && editing?.col === ci
+                  // Display column index for this data cell: +1 because
+                  // column 0 is the «№» column.
+                  const displayCol = ci + 1
+                  const isActive = active?.row === ri && active?.col === displayCol
+                  const isEditing = editing?.row === ri && editing?.col === displayCol
                   const cellStyle: CSSProperties = {
                     textAlign: c.align ?? 'left',
                     fontFamily: c.mono ? 'var(--mono)' : undefined,
@@ -478,8 +506,8 @@ export function PositionTable<T>({
                     <td
                       key={c.key}
                       style={cellStyle}
-                      onClick={() => onCellClick(ri, ci)}
-                      onDoubleClick={() => onCellDoubleClick(ri, ci)}
+                      onClick={() => onCellClick(ri, displayCol)}
+                      onDoubleClick={() => onCellDoubleClick(ri, displayCol)}
                     >
                       {value || (c.mono ? '' : '—')}
                     </td>

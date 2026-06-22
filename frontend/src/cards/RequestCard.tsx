@@ -179,7 +179,17 @@ export function RequestCard() {
   )
 
   const onAddRows = useCallback(
-    (afterRowId: string | number | null, count: number) => {
+    (afterRowId: string | number | null, count: number): string[] => {
+      // Build the new rows synchronously so we can return their ids. The
+      // same array is then spliced into setRows' functional update — no
+      // double-makeLocalRow, no race with the re-render.
+      const fresh: EditableRow[] = []
+      const newIds: string[] = []
+      for (let i = 0; i < count; i++) {
+        const newRow = makeLocalRow()
+        fresh.push(newRow)
+        newIds.push(newRow._localId)
+      }
       setEditRows((prev) => {
         const cur = prev ?? []
         const idx =
@@ -187,9 +197,9 @@ export function RequestCard() {
             ? cur.length
             : cur.findIndex((r) => r._localId === afterRowId)
         const insertAt = idx === -1 ? cur.length : idx + 1
-        const fresh = Array.from({ length: count }, () => makeLocalRow())
         return [...cur.slice(0, insertAt), ...fresh, ...cur.slice(insertAt)]
       })
+      return newIds
     },
     [],
   )
