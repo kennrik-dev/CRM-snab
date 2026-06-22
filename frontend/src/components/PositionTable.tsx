@@ -105,16 +105,16 @@ const rowNumberInputStyle: CSSProperties = {
 const NUM_KEY = 'num' as keyof unknown
 
 // Translate display col → underlying data key (returns 'num' for col 0).
-function colToKey<T>(col: number, columns: PositionTableColumn<T>[]): string | null {
+export function colToKey<T>(col: number, columns: PositionTableColumn<T>[]): string | null {
   if (col === 0) return NUM_KEY as string
   const dataCol = columns[col - 1]
   return dataCol ? dataCol.key : null
 }
 
-function isReadOnlyCol<T>(col: number, columns: PositionTableColumn<T>[], readOnly: boolean): boolean {
+export function isReadOnlyCol<T>(col: number, columns: PositionTableColumn<T>[], readOnly: boolean): boolean {
   if (readOnly) return true
   if (col === 0) return false
-  return columns[col - 1]?.readOnly ?? true
+  return columns[col - 1]?.readOnly ?? false
 }
 
 export function PositionTable<T>({
