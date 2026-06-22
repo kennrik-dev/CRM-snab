@@ -20,6 +20,7 @@ class RequestPositionIn(BaseModel):
     unit: Optional[str] = None
     gost_tu: Optional[str] = None
     doc_code: Optional[str] = None
+    num: Optional[str] = None
 
 
 class RequestPositionPatch(BaseModel):
@@ -29,6 +30,7 @@ class RequestPositionPatch(BaseModel):
     unit: Optional[str] = None
     gost_tu: Optional[str] = None
     doc_code: Optional[str] = None
+    num: Optional[str] = None
 
 
 class PositionOut(BaseModel):
@@ -42,6 +44,7 @@ class PositionOut(BaseModel):
     unit: Optional[str] = None
     gost_tu: Optional[str] = None
     doc_code: Optional[str] = None
+    num: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------

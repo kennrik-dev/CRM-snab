@@ -247,6 +247,7 @@ def create_request(
                 unit=p.unit,
                 gost_tu=p.gost_tu,
                 doc_code=p.doc_code,
+                num=p.num,
             )
         )
     if payload.positions:
@@ -451,6 +452,7 @@ def duplicate_request(
                 unit=p.unit,
                 gost_tu=p.gost_tu,
                 doc_code=p.doc_code,
+                num=p.num,
             )
         )
     if src_positions:
@@ -523,6 +525,7 @@ def mass_insert_positions(
             unit=p.unit,
             gost_tu=p.gost_tu,
             doc_code=p.doc_code,
+            num=p.num,
         )
         db.add(row)
         inserted.append(row)
@@ -583,6 +586,8 @@ def patch_position(
         pos.gost_tu = data["gost_tu"]
     if "doc_code" in data:
         pos.doc_code = data["doc_code"]
+    if "num" in data:
+        pos.num = data["num"]
 
     db.commit()
     db.refresh(pos)

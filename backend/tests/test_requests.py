@@ -229,6 +229,53 @@ def test_create_request_persists_positions(client_admin, db_seeded):
     assert names == {"Гайка", "Шайба"}
 
 
+def test_create_request_persists_position_num(client_admin):
+    """The manual «№» column (num) must round-trip through create."""
+    body = _create_request_via_api(
+        client_admin,
+        code="NUM-1",
+        title="Num persist",
+        positions=[{"name": "Болт", "qty": 5.0, "num": "1.2"}],
+    )
+    assert body["positions"][0]["num"] == "1.2"
+    got = client_admin.get(f"/requests/{body['id']}").json()
+    assert got["positions"][0]["num"] == "1.2"
+
+
+def test_patch_position_num(client_admin):
+    """Patching num updates and persists it."""
+    body = _create_request_via_api(
+        client_admin,
+        code="NUM-2",
+        title="Num patch",
+        positions=[{"name": "x", "qty": 1.0}],
+    )
+    pos_id = body["positions"][0]["id"]
+    r = client_admin.patch(
+        f"/requests/{body['id']}/positions/{pos_id}",
+        json={"num": "3"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["num"] == "3"
+    got = client_admin.get(f"/requests/{body['id']}").json()
+    assert got["positions"][0]["num"] == "3"
+
+
+def test_duplicate_request_copies_position_num(client_admin):
+    """Duplicating a request copies the num of each position."""
+    body = _create_request_via_api(
+        client_admin,
+        code="NUM-3",
+        title="Num dup",
+        positions=[{"name": "x", "qty": 1.0, "num": "7"}],
+    )
+    r = client_admin.post(
+        f"/requests/{body['id']}/duplicate", json={"code": "NUM-3-COPY"}
+    )
+    assert r.status_code == 200
+    assert r.json()["positions"][0]["num"] == "7"
+
+
 def test_create_request_duplicate_code_409(client_admin):
     _create_request_via_api(client_admin, code="DUP-1", title="Первый")
     r = client_admin.post(

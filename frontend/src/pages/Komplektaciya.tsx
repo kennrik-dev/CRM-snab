@@ -212,6 +212,7 @@ function CreateRequestModal({
           unit: r.unit ?? null,
           gost_tu: r.gost_tu ?? null,
           doc_code: r.doc_code ?? null,
+          num: r.num ?? null,
         })),
     [rows],
   )

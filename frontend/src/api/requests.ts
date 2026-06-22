@@ -31,6 +31,7 @@ export type RequestPosition = {
   unit: string | null
   gost_tu: string | null
   doc_code: string | null
+  num: string | null
 }
 
 export type ProcedureOut = {
@@ -73,6 +74,7 @@ export type RequestPositionInput = {
   unit?: string | null
   gost_tu?: string | null
   doc_code?: string | null
+  num?: string | null
 }
 
 export type RequestCreate = {

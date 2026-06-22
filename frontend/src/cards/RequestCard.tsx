@@ -52,6 +52,7 @@ function toEditable(p: RequestPosition): EditableRow {
   return {
     _localId: `pos-${p.id}`,
     id: p.id,
+    num: p.num,
     name: p.name,
     qty: p.qty,
     unit: p.unit,
@@ -239,6 +240,7 @@ export function RequestCard() {
         if ((row.unit ?? null) !== (prev.unit ?? null)) patch.unit = row.unit ?? null
         if ((row.gost_tu ?? null) !== (prev.gost_tu ?? null)) patch.gost_tu = row.gost_tu ?? null
         if ((row.doc_code ?? null) !== (prev.doc_code ?? null)) patch.doc_code = row.doc_code ?? null
+        if ((row.num ?? null) !== (prev.num ?? null)) patch.num = row.num ?? null
         if (Object.keys(patch).length > 0) {
           await patchPosition(requestId, row.id, patch)
         }
@@ -257,6 +259,7 @@ export function RequestCard() {
           unit: r.unit ?? null,
           gost_tu: r.gost_tu ?? null,
           doc_code: r.doc_code ?? null,
+          num: r.num ?? null,
         }))
       if (newRows.length > 0) {
         await addPositions(requestId, newRows)

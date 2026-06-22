@@ -112,6 +112,9 @@ class RequestedPosition(Base):
     unit: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     gost_tu: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     doc_code: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Manual «№» of the position within the request (user-entered, not
+    # auto-numbered). Optional / nullable.
+    num: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     __table_args__ = (Index("ix_reqpos_parent", "parent_id"),)
 
