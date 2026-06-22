@@ -115,6 +115,7 @@ function buildColumns(): DataTableColumn<NumberedRow>[] {
 
 type DraftRow = {
   id: string
+  num?: string | null
   name: string | null
   qty: number | null
   unit: string | null
@@ -128,6 +129,7 @@ function makeDraftRow(): DraftRow {
       typeof crypto !== 'undefined' && 'randomUUID' in crypto
         ? crypto.randomUUID()
         : `r-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    num: null,
     name: null,
     qty: null,
     unit: null,
@@ -166,8 +168,15 @@ function CreateRequestModal({
 
   const createMut = useMutation({
     mutationFn: (payload: RequestCreate) => createRequest(payload),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['requests'] })
+    onSuccess: async () => {
+      // Refetch the list and the tab-counter before closing the modal so the
+      // user always sees the new row appear together with the modal close.
+      // (Without this, the list can flash old data for ~100-300 ms after
+      // the modal disappears, which some users read as "nothing happened".)
+      await Promise.all([
+        qc.refetchQueries({ queryKey: ['requests'] }),
+        qc.refetchQueries({ queryKey: ['requests', { tabCounter: true }] }),
+      ])
       onClose()
     },
     onError: (err: unknown) => {
@@ -175,8 +184,8 @@ function CreateRequestModal({
       const detail = apiErr?.body?.detail
       setSubmitErr(
         apiErr?.status === 409
-          ? 'Заявка с таким кодом уже существует'
-          : detail ?? 'Не удалось создать заявку',
+          ? 'Заявка с таким кодом уже существует — выберите другой код'
+          : detail ?? `Не удалось создать заявку (${apiErr?.status ?? 'сеть'})`,
       )
     },
   })
@@ -308,6 +317,45 @@ function CreateRequestModal({
         </>
       }
     >
+      {submitErr && (
+        <div
+          role="alert"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            padding: '10px 14px',
+            marginBottom: 14,
+            fontSize: 12.5,
+            color: 'var(--late)',
+            background: 'var(--late-bg)',
+            border: '1px solid var(--late)',
+            borderRadius: 5,
+            fontWeight: 500,
+          }}
+        >
+          <span
+            style={{
+              flex: 'none',
+              width: 20,
+              height: 20,
+              borderRadius: '50%',
+              background: 'var(--late)',
+              color: '#fff',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: 13,
+              fontWeight: 700,
+            }}
+            aria-hidden
+          >
+            !
+          </span>
+          <span>{submitErr}</span>
+        </div>
+      )}
+
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
         <label style={fieldStyle}>
           <span style={labelStyle}>Код *</span>
@@ -386,21 +434,6 @@ function CreateRequestModal({
             : `Позиций заполнено: ${positions.length}. Вставьте данные из Excel/Sheets (Ctrl+V) — колонки заполнятся автоматически.`}
         </div>
       </div>
-
-      {submitErr && (
-        <div
-          style={{
-            marginTop: 12,
-            padding: '8px 10px',
-            fontSize: 12,
-            color: 'var(--late)',
-            background: 'var(--late-bg)',
-            borderRadius: 5,
-          }}
-        >
-          {submitErr}
-        </div>
-      )}
     </Modal>
   )
 }

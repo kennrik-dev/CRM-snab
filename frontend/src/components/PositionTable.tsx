@@ -18,7 +18,7 @@
  *   onAddRows      — (afterRowId | null, count) добавление N пустых строк
  *                    (вызывается при paste, если строк не хватает)
  *   readOnly       — запретить всё редактирование
- *   showRowNumber  — добавить колонку «№» слева (1-based)
+ *   showRowNumber  — добавить колонку «№» слева (ручной ввод)
  *   emptyMessage   — текст, когда строк 0
  */
 import {
@@ -44,6 +44,13 @@ export type PositionTableColumn<T> = {
   readOnly?: boolean
 }
 
+/**
+ * The `num` field on rows is optional and read/written via the leading «№»
+ * column. To keep the component generic, callers can pass any row shape —
+ * the «№» cell uses a runtime check (`num` in row) rather than a TS
+ * constraint. The field is treated as UI metadata; the parent's
+ * `onCellChange` decides whether to forward it to the server.
+ */
 type Props<T> = {
   rows: T[]
   columns: PositionTableColumn<T>[]
@@ -70,12 +77,26 @@ const deleteBtnStyle: CSSProperties = {
   borderRadius: 3,
 }
 
-// Parse the leading # of a row number cell so it always renders "1, 2, 3…"
-// no matter how the data is sorted.
-const rowNumberStyle: CSSProperties = {
+// Leading «№» column — manual text input, monospace, no auto-numbering.
+const rowNumberCellStyle: CSSProperties = {
+  padding: 0,
+  textAlign: 'center',
   fontFamily: 'var(--mono)',
-  color: 'var(--faint)',
   fontSize: 12,
+  color: 'var(--faint)',
+}
+
+const rowNumberInputStyle: CSSProperties = {
+  width: '100%',
+  height: '100%',
+  border: 0,
+  outline: 'none',
+  background: 'transparent',
+  font: 'inherit',
+  fontFamily: 'var(--mono)',
+  textAlign: 'center',
+  color: 'var(--ink)',
+  padding: '9px 4px',
 }
 
 export function PositionTable<T>({
@@ -385,7 +406,23 @@ export function PositionTable<T>({
             return (
               <tr key={rowId}>
                 {showRowNumber && (
-                  <td style={rowNumberStyle}>{ri + 1}</td>
+                  <td style={rowNumberCellStyle}>
+                    {readOnly ? (
+                      <span>{getCellValue(row, 'num' as keyof T & string) || '—'}</span>
+                    ) : (
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        value={getCellValue(row, 'num' as keyof T & string)}
+                        onChange={(e) =>
+                          onCellChange(rowId, 'num' as keyof T & string, e.target.value)
+                        }
+                        onClick={(e) => e.stopPropagation()}
+                        placeholder="—"
+                        style={rowNumberInputStyle}
+                      />
+                    )}
+                  </td>
                 )}
                 {columns.map((c, ci) => {
                   const isActive = active?.row === ri && active?.col === ci

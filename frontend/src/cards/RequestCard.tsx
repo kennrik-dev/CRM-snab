@@ -25,6 +25,7 @@ import { dateRu } from '../lib/format'
 type EditableRow = {
   _localId: string
   id?: number
+  num?: string | null
   name: string | null
   qty: number | null
   unit: string | null
@@ -38,6 +39,7 @@ function makeLocalRow(): EditableRow {
       typeof crypto !== 'undefined' && 'randomUUID' in crypto
         ? crypto.randomUUID()
         : `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    num: null,
     name: null,
     qty: null,
     unit: null,
