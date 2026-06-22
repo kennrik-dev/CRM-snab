@@ -1294,10 +1294,11 @@ def test_take_to_work_audit_written(client_admin, db_seeded):
     assert rows[0].user_id is not None
 
 
-def test_take_to_work_include_archived_still_shows_request(client_admin):
-    """After take-to-work the request status is still 'awaiting' (it is
-    cancelled vs awaiting, not 'with/without procedures'). So
-    include_archived=1 should still return it."""
+def test_take_to_work_excluded_from_archived_view(client_admin):
+    """After take-to-work the parent has left «Ожидают закупки» for
+    «В закупке» (Phase 5). The "Показать отменённые" toggle
+    (include_archived=1) must reveal only genuinely cancelled requests —
+    NOT taken-to-work ones. Per docs/02-statuses.md §7.1."""
     body = _create_request_via_api(
         client_admin,
         code="TW-ARCH",
@@ -1307,9 +1308,47 @@ def test_take_to_work_include_archived_still_shows_request(client_admin):
     r1 = client_admin.post(f"/requests/{body['id']}/take-to-work")
     assert r1.status_code == 200
 
+    # Default view: excluded (it now has a tender)
+    r_def = client_admin.get("/requests")
+    assert "TW-ARCH" not in {it["code"] for it in r_def.json()["items"]}
+
+    # Archive view: STILL excluded — taken-to-work is not "cancelled"
     r2 = client_admin.get("/requests?include_archived=1")
     codes = {it["code"] for it in r2.json()["items"]}
-    assert "TW-ARCH" in codes
-    # status is still 'awaiting'
-    target = next(it for it in r2.json()["items"] if it["id"] == body["id"])
-    assert target["status"] == "awaiting"
+    assert "TW-ARCH" not in codes
+
+
+def test_archived_view_shows_cancelled_but_not_taken_to_work(client_admin):
+    """Regression for the reported bug: awaiting requests that were taken to
+    work (Т-65-style) must NOT appear under "Показать отменённые", while
+    genuinely cancelled requests (with or without a tender) must."""
+    # A — plain awaiting, no tender
+    a = _create_request_via_api(client_admin, code="REG-A", title="Активная")
+    # B — taken to work (awaiting + tender)
+    b = _create_request_via_api(
+        client_admin, code="REG-B", title="В работе", positions=[{"name": "x", "qty": 1.0}]
+    )
+    assert client_admin.post(f"/requests/{b['id']}/take-to-work").status_code == 200
+    # C — cancelled, no tender
+    c = _create_request_via_api(client_admin, code="REG-C", title="Отменена")
+    assert client_admin.post(f"/requests/{c['id']}/cancel").status_code == 200
+    # D — taken to work, THEN cancelled (cancelled + tender)
+    d = _create_request_via_api(
+        client_admin, code="REG-D", title="В работе потом отмена", positions=[{"name": "y", "qty": 1.0}]
+    )
+    assert client_admin.post(f"/requests/{d['id']}/take-to-work").status_code == 200
+    assert client_admin.post(f"/requests/{d['id']}/cancel").status_code == 200
+
+    # Default view: only A (awaiting, no tender)
+    default = {it["code"] for it in client_admin.get("/requests").json()["items"]}
+    assert "REG-A" in default
+    assert "REG-B" not in default
+    assert "REG-C" not in default
+    assert "REG-D" not in default
+
+    # Archive view: A + cancelled (C, D); taken-to-work-but-active (B) excluded
+    archived = {it["code"] for it in client_admin.get("/requests?include_archived=1").json()["items"]}
+    assert "REG-A" in archived
+    assert "REG-B" not in archived  # the reported bug — was leaking in
+    assert "REG-C" in archived
+    assert "REG-D" in archived

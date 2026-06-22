@@ -139,14 +139,19 @@ def list_requests(
         q = q.filter(ParentRequest.status == status_filter)
     else:
         q = apply_archive_filter(q, include_archived=include_archived)
-
-    # «Ожидают закупки» = parents awaiting WITHOUT tenders.
-    # Apply only when no explicit status filter is given (status=cancelled
-    # bypasses this — it's the archive view).
-    if status_filter is None and not include_archived:
-        q = q.filter(
-            ~db.query(Tender).filter(Tender.parent_id == ParentRequest.id).exists()
-        )
+        # Taken-to-work parents (awaiting WITH a tender) have left
+        # «Ожидают закупки» for «В закупке» (Phase 5) — exclude them from
+        # every non-cancelled view. A genuinely cancelled parent (shown via
+        # the include_archived toggle) is kept regardless of tender. So
+        # "Показать отменённые" reveals only cancelled requests, never
+        # taken-to-work ones. Per docs/02-statuses.md §7.1.
+        no_tender = ~db.query(Tender).filter(
+            Tender.parent_id == ParentRequest.id
+        ).exists()
+        if include_archived:
+            q = q.filter((ParentRequest.status == "cancelled") | no_tender)
+        else:
+            q = q.filter(no_tender)
 
     # search (Unicode-aware via py_casefold, registered in app.db)
     if search:
