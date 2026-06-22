@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Chip } from '../components/Chip'
@@ -89,6 +89,15 @@ export function RequestCard() {
 
   const [editRows, setEditRows] = useState<EditableRow[] | null>(null)
   const [actionErr, setActionErr] = useState<string | null>(null)
+  // Transient "changes saved" confirmation: a counter that increments on each
+  // successful save and auto-clears after 2.5s. A counter (not a boolean) so
+  // repeated saves re-trigger the timeout.
+  const [savedTick, setSavedTick] = useState(0)
+  useEffect(() => {
+    if (savedTick === 0) return
+    const t = window.setTimeout(() => setSavedTick(0), 2500)
+    return () => window.clearTimeout(t)
+  }, [savedTick])
 
   // When server data first arrives, seed local edit rows (only if user can
   // edit and status is awaiting). We check `editRows === null` so we don't
@@ -274,6 +283,7 @@ export function RequestCard() {
         }
       }
       refresh()
+      setSavedTick((t) => t + 1)
     } catch (err) {
       setActionErr(lastErrorMessage(err))
     }
@@ -414,6 +424,22 @@ export function RequestCard() {
             }}
           >
             {actionErr}
+          </div>
+        )}
+
+        {savedTick > 0 && (
+          <div
+            style={{
+              margin: '14px 22px 0',
+              padding: '8px 12px',
+              fontSize: 12.5,
+              fontWeight: 500,
+              color: 'var(--ok)',
+              background: 'var(--ok-bg)',
+              borderRadius: 5,
+            }}
+          >
+            ✓ Изменения сохранены
           </div>
         )}
 
