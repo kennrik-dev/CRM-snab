@@ -169,7 +169,7 @@ export function ProcedureCard() {
                 <b>№ процедуры:</b> {proc.proc ?? '—'} ·{' '}
                 <b>Поставщик:</b>{' '}
                 {proc.supplier ?? (
-                  <i style={{ color: 'var(--late)' }}>не выбран</i>
+                  <span className="supp-c empty">не выбран</span>
                 )}{' '}
                 · <b>Тип МТР:</b> {proc.mtr ?? '—'} ·{' '}
                 <b>Закупщик:</b> {proc.fio_zakupshchik ?? '—'}

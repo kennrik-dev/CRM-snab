@@ -19,9 +19,11 @@ const PLACEHOLDER = '—'
 
 export function money(kopecks: number | null | undefined): string {
   if (kopecks === null || kopecks === undefined) return PLACEHOLDER
-  // RUB_FORMAT already produces a non-breaking-space thousands separator
-  // and " ₽" suffix per ru-RU locale rules.
-  return RUB_FORMAT.format(kopecks)
+  // Input is integer KOPEEKS — convert to rubles before formatting. Money is
+  // stored as kopecks end-to-end (DB/API) and only converted to ₽ here, at
+  // render. Round to whole rubles (the project displays money without kopecks
+  // decimals). RUB_FORMAT adds the NBSP thousands separator + " ₽" suffix.
+  return RUB_FORMAT.format(Math.round(kopecks / 100))
 }
 
 export function dateRu(iso: string | null | undefined): string {

@@ -8,9 +8,11 @@ describe('money', () => {
     expect(out).toContain('₽')
   })
 
-  it('formats 1 234 567 kopecks with thousands separator', () => {
+  it('formats 1 234 567 kopecks as 12 346 (kopecks → rubles, rounded)', () => {
     const out = money(1234567)
-    expect(out).toMatch(/1[\s ]234[\s ]567/)
+    // 1 234 567 kopecks = 12 345.67 ₽ → rounded to 12 346 ₽ (kopecks→rubles).
+    expect(out).toMatch(/12[\s ]346/)
+    expect(out).toContain('₽')
   })
 
   it('returns "—" for null', () => {
