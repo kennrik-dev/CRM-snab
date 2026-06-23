@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 # ---------------------------------------------------------------------------
@@ -93,10 +93,49 @@ class ProcedurePatch(BaseModel):
     status_zakup: Optional[str] = None   # validated against dict (6 values)
 
 
+# ---------------------------------------------------------------------------
+# Phase 5.2 — split + priced positions + to-support
+# ---------------------------------------------------------------------------
+
+class SplitItem(BaseModel):
+    source_position_id: int
+    qty: float = Field(gt=0)
+
+
+class SplitIn(BaseModel):
+    positions: list[SplitItem] = Field(min_length=1)
+    supplier: Optional[str] = None
+    proc: Optional[str] = None      # sister's № процедуры (unique; NULL ok)
+    mtr: Optional[str] = None       # sister's МТР override (else inherit source's)
+
+
+class ProcedurePositionIn(BaseModel):
+    name: str = Field(min_length=1)
+    qty: float
+    unit: Optional[str] = None
+    gost_tu: Optional[str] = None
+    doc_code: Optional[str] = None
+    price: Optional[int] = None     # INTEGER kopecks
+    source_id: Optional[int] = None # null = added by purchaser (no cap)
+
+
+class ProcedurePositionPatch(BaseModel):
+    name: Optional[str] = None
+    qty: Optional[float] = None
+    unit: Optional[str] = None
+    gost_tu: Optional[str] = None
+    doc_code: Optional[str] = None
+    price: Optional[int] = None
+
+
 __all__ = [
     "ProcedurePositionOut",
     "ProcedureListItem",
     "PaginatedProcedures",
     "ProcedureDetail",
     "ProcedurePatch",
+    "SplitItem",
+    "SplitIn",
+    "ProcedurePositionIn",
+    "ProcedurePositionPatch",
 ]

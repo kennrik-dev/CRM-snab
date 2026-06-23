@@ -2,9 +2,11 @@
 
 Phase 5.1 — locked spec from
 `docs/superpowers/plans/2026-06-23-phase5-zakupka.md` §5.1.
+Phase 5.2 — split + priced positions CRUD + to-support (§5.2).
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -19,6 +21,7 @@ from app.models import (
     ParentRequest,
     Procedure,
     ProcedurePosition,
+    RequestedPosition,
     Tender,
     User,
 )
@@ -28,7 +31,10 @@ from app.schemas.procedures import (
     ProcedureDetail,
     ProcedureListItem,
     ProcedurePatch,
+    ProcedurePositionIn,
     ProcedurePositionOut,
+    ProcedurePositionPatch,
+    SplitIn,
 )
 
 
@@ -89,6 +95,25 @@ def _build_detail(db: Session, proc: Procedure) -> ProcedureDetail:
         created_at=proc.created_at,
         positions=[ProcedurePositionOut.model_validate(p) for p in positions],
     )
+
+
+def _source_total_qty(db: Session, source_id: int) -> float:
+    """Σ(qty) of all ProcedurePosition rows referencing a requested_position.
+
+    Used by the split-move invariant (docs/01-domain-model.md §2.4):
+    Σ распределённого ≤ запрошенного. Compared against the requested qty with
+    float tolerance.
+    """
+    return (
+        db.query(func.coalesce(func.sum(ProcedurePosition.qty), 0))
+        .filter(ProcedurePosition.source_id == source_id)
+        .scalar()
+        or 0.0
+    )
+
+
+# Float tolerance for the Σ≤requested invariant check.
+_QTY_TOLERANCE = 1e-9
 
 
 # ---------------------------------------------------------------------------
@@ -371,5 +396,328 @@ def uncancel_procedure(
         entity_id=proc.id,
         user=current_user,
         action="uncancel",
+    )
+    return _build_detail(db, proc)
+
+
+# ===========================================================================
+# Phase 5.2 — split + priced positions CRUD + to-support
+# ===========================================================================
+
+
+# ---------------------------------------------------------------------------
+# POST /procedures/{id}/split — MOVE qty into a new sister procedure
+# ---------------------------------------------------------------------------
+
+@router.post("/procedures/{procedure_id}/split", response_model=ProcedureDetail)
+def split_procedure(
+    procedure_id: int,
+    payload: SplitIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_action("zakupka", "edit")),
+) -> ProcedureDetail:
+    """Split is MOVE: reduce each source position's qty and create a sister
+    procedure holding the transferred qty. Per-position binding check is
+    ``0 < item.qty <= source_position.qty`` else 422 — this is what enforces
+    Σ≤requested, since a healthy DB starts at the cap after take-to-work and
+    each move preserves Σ.
+    """
+    S = db.get(Procedure, procedure_id)
+    if S is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="procedure not found",
+        )
+
+    # Sister proc uniqueness (non-null) → 409. NULL ok.
+    if payload.proc is not None:
+        existing = (
+            db.query(Procedure).filter(Procedure.proc == payload.proc).first()
+        )
+        if existing is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="proc already exists",
+            )
+
+    # Create the sister procedure in the SAME tender.
+    sister = Procedure(
+        tender_id=S.tender_id,
+        block="zakupka",
+        status_zakup="Новая",
+        block_entered_at=datetime.now(timezone.utc).isoformat(),
+        supplier=payload.supplier,
+        proc=payload.proc,
+        mtr=payload.mtr if payload.mtr is not None else S.mtr,
+    )
+    db.add(sister)
+    db.commit()
+    db.refresh(sister)
+
+    for item in payload.positions:
+        sp = db.get(ProcedurePosition, item.source_position_id)
+        if sp is None or sp.procedure_id != S.id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="source position not found",
+            )
+        # Binding invariant: 0 < qty <= available (sp.qty). Pydantic enforces >0.
+        if item.qty > sp.qty + _QTY_TOLERANCE:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="split qty exceeds available",
+            )
+
+        # Sister position inherits the source's catalog fields + source_id + price.
+        db.add(
+            ProcedurePosition(
+                procedure_id=sister.id,
+                source_id=sp.source_id,
+                name=sp.name,
+                qty=item.qty,
+                unit=sp.unit,
+                gost_tu=sp.gost_tu,
+                doc_code=sp.doc_code,
+                price=sp.price,
+            )
+        )
+
+        # Reduce the source position; fully-transferred → delete.
+        remaining = sp.qty - item.qty
+        if abs(remaining) < _QTY_TOLERANCE:
+            db.delete(sp)
+        else:
+            sp.qty = remaining
+        db.commit()
+
+    write_audit(
+        db,
+        entity_kind="procedure",
+        entity_id=S.id,
+        user=current_user,
+        action="split",
+    )
+    return _build_detail(db, sister)
+
+
+# ---------------------------------------------------------------------------
+# GET /procedures/{id}/positions — list (asc by id)
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "/procedures/{procedure_id}/positions",
+    response_model=list[ProcedurePositionOut],
+)
+def list_procedure_positions(
+    procedure_id: int,
+    db: Session = Depends(get_db),
+    _user: User = Depends(require_password_changed),
+) -> list[ProcedurePositionOut]:
+    proc = db.get(Procedure, procedure_id)
+    if proc is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="procedure not found",
+        )
+    rows = (
+        db.query(ProcedurePosition)
+        .filter(ProcedurePosition.procedure_id == procedure_id)
+        .order_by(ProcedurePosition.id.asc())
+        .all()
+    )
+    return [ProcedurePositionOut.model_validate(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# POST /procedures/{id}/positions — mass insert
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/procedures/{procedure_id}/positions",
+    response_model=list[ProcedurePositionOut],
+    status_code=status.HTTP_200_OK,
+)
+def add_procedure_positions(
+    procedure_id: int,
+    positions: list[ProcedurePositionIn],
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_action("zakupka", "edit")),
+) -> list[ProcedurePositionOut]:
+    proc = db.get(Procedure, procedure_id)
+    if proc is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="procedure not found",
+        )
+
+    inserted: list[ProcedurePosition] = []
+    for p in positions:
+        # Sourced positions are capped by the requested qty (Σ≤requested).
+        if p.source_id is not None:
+            requested = db.get(RequestedPosition, p.source_id)
+            new_total = _source_total_qty(db, p.source_id) + p.qty
+            if requested is None or new_total > requested.qty + _QTY_TOLERANCE:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="qty exceeds requested",
+                )
+        row = ProcedurePosition(
+            procedure_id=proc.id,
+            source_id=p.source_id,
+            name=p.name,
+            qty=p.qty,
+            unit=p.unit,
+            gost_tu=p.gost_tu,
+            doc_code=p.doc_code,
+            price=p.price,
+        )
+        db.add(row)
+        inserted.append(row)
+
+    if inserted:
+        db.commit()
+        for row in inserted:
+            db.refresh(row)
+        write_audit(
+            db,
+            entity_kind="procedure",
+            entity_id=proc.id,
+            user=current_user,
+            action="positions_add",
+        )
+    return [ProcedurePositionOut.model_validate(r) for r in inserted]
+
+
+# ---------------------------------------------------------------------------
+# PATCH /procedures/{id}/positions/{pos_id}
+# ---------------------------------------------------------------------------
+
+@router.patch(
+    "/procedures/{procedure_id}/positions/{pos_id}",
+    response_model=ProcedurePositionOut,
+)
+def patch_procedure_position(
+    procedure_id: int,
+    pos_id: int,
+    payload: ProcedurePositionPatch,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_action("zakupka", "edit")),
+) -> ProcedurePositionOut:
+    proc = db.get(Procedure, procedure_id)
+    if proc is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="procedure not found",
+        )
+
+    pos = db.get(ProcedurePosition, pos_id)
+    if pos is None or pos.procedure_id != procedure_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="position not found",
+        )
+
+    data = payload.model_dump(exclude_unset=True)
+
+    # Sourced qty change re-checks the global Σ≤requested invariant.
+    if "qty" in data and data["qty"] is not None and pos.source_id is not None:
+        requested = db.get(RequestedPosition, pos.source_id)
+        new_total = (
+            _source_total_qty(db, pos.source_id) - pos.qty + data["qty"]
+        )
+        if requested is None or new_total > requested.qty + _QTY_TOLERANCE:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="qty exceeds requested",
+            )
+
+    for field in ("name", "qty", "unit", "gost_tu", "doc_code", "price"):
+        if field in data:
+            setattr(pos, field, data[field])
+
+    db.commit()
+    db.refresh(pos)
+    write_audit(
+        db,
+        entity_kind="procedure",
+        entity_id=proc.id,
+        user=current_user,
+        action="position_update",
+    )
+    return ProcedurePositionOut.model_validate(pos)
+
+
+# ---------------------------------------------------------------------------
+# DELETE /procedures/{id}/positions/{pos_id}
+# ---------------------------------------------------------------------------
+
+@router.delete("/procedures/{procedure_id}/positions/{pos_id}")
+def delete_procedure_position(
+    procedure_id: int,
+    pos_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_action("zakupka", "edit")),
+) -> dict:
+    proc = db.get(Procedure, procedure_id)
+    if proc is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="procedure not found",
+        )
+
+    pos = db.get(ProcedurePosition, pos_id)
+    if pos is None or pos.procedure_id != procedure_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="position not found",
+        )
+
+    db.delete(pos)
+    db.commit()
+    write_audit(
+        db,
+        entity_kind="procedure",
+        entity_id=proc.id,
+        user=current_user,
+        action="position_delete",
+    )
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# POST /procedures/{id}/to-support — hand off to Сопровождение
+# ---------------------------------------------------------------------------
+
+@router.post("/procedures/{procedure_id}/to-support", response_model=ProcedureDetail)
+def to_support(
+    procedure_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_action("zakupka", "edit")),
+) -> ProcedureDetail:
+    proc = db.get(Procedure, procedure_id)
+    if proc is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="procedure not found",
+        )
+    # Only «На сделку» may advance to Сопровождение (covers Новая/Отменена/other).
+    if proc.status_zakup != "На сделку":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="procedure is not ready for support",
+        )
+
+    proc.block = "soprovozhdenie"
+    proc.status_postavki = "Новая"
+    proc.block_entered_at = datetime.now(timezone.utc).isoformat()
+    db.commit()
+    db.refresh(proc)
+
+    write_audit(
+        db,
+        entity_kind="procedure",
+        entity_id=proc.id,
+        user=current_user,
+        action="to_support",
     )
     return _build_detail(db, proc)

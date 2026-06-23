@@ -735,3 +735,740 @@ def test_rbac_uncancel_403_for_kompl(client_kompl_emp):
     client, proc_id = client_kompl_emp
     r = client.post(f"/procedures/{proc_id}/uncancel")
     assert r.status_code == 403
+
+
+# ===========================================================================
+# Phase 5.2 — split + priced positions + to-support
+# ===========================================================================
+#
+# After take-to-work, each procedure position has source_id set and qty ==
+# the requested_position.qty (the cap is reached). Helper below loads the
+# first sourced position id of a procedure for split tests.
+# ---------------------------------------------------------------------------
+
+def _first_position_id(client, proc_id):
+    r = client.get(f"/procedures/{proc_id}")
+    assert r.status_code == 200, r.text
+    positions = r.json()["positions"]
+    assert positions, "procedure has no positions"
+    return positions[0]["id"]
+
+
+# ---------------------------------------------------------------------------
+# Group A — split happy path + full transfer
+# ---------------------------------------------------------------------------
+
+def test_split_happy_partial_transfer(client_admin):
+    tw = _take_to_work_with_positions(
+        client_admin, code="SPL-1", title="split partial",
+        positions=[{"name": "Болт", "qty": 10.0, "unit": "шт"}],
+    )
+    proc_id = tw["procedure_id"]
+    src_pos_id = _first_position_id(client_admin, proc_id)
+
+    r = client_admin.post(
+        f"/procedures/{proc_id}/split",
+        json={
+            "positions": [{"source_position_id": src_pos_id, "qty": 4.0}],
+            "supplier": "ООО Сплит",
+            "proc": "SPL-PROC-1",
+        },
+    )
+    assert r.status_code == 200, r.text
+    sister = r.json()
+    sister_id = sister["id"]
+    assert sister_id != proc_id
+    assert sister["block"] == "zakupka"
+    assert sister["status_zakup"] == "Новая"
+    assert sister["supplier"] == "ООО Сплит"
+    assert sister["proc"] == "SPL-PROC-1"
+    assert sister["tender_id"] == tw["tender_id"]
+
+    # sister holds qty=4, source_id preserved
+    s_pos = sister["positions"][0]
+    assert s_pos["qty"] == 4.0
+    assert s_pos["source_id"] is not None
+
+    # source position qty reduced to 6
+    src_detail = client_admin.get(f"/procedures/{proc_id}").json()
+    src_pos = next(p for p in src_detail["positions"] if p["id"] == src_pos_id)
+    assert src_pos["qty"] == 6.0
+
+    # sister appears in /procurement (total +1)
+    r_list = client_admin.get("/procurement")
+    ids = {it["id"] for it in r_list.json()["items"]}
+    assert sister_id in ids
+    assert r_list.json()["total"] == 2
+
+
+def test_split_full_transfer_deletes_source_position(client_admin):
+    tw = _take_to_work_with_positions(
+        client_admin, code="SPL-2", title="split full",
+        positions=[{"name": "Гайка", "qty": 10.0}],
+    )
+    proc_id = tw["procedure_id"]
+    src_pos_id = _first_position_id(client_admin, proc_id)
+
+    r = client_admin.post(
+        f"/procedures/{proc_id}/split",
+        json={"positions": [{"source_position_id": src_pos_id, "qty": 10.0}]},
+    )
+    assert r.status_code == 200, r.text
+    sister_id = r.json()["id"]
+
+    # source position fully transferred → deleted from original procedure
+    src_detail = client_admin.get(f"/procedures/{proc_id}").json()
+    assert all(p["id"] != src_pos_id for p in src_detail["positions"])
+
+    # sister holds the full qty
+    sister = client_admin.get(f"/procedures/{sister_id}").json()
+    assert sister["positions"][0]["qty"] == 10.0
+
+
+def test_split_mtr_inherits_when_null(client_admin):
+    # parent.mtr set, proc.mtr null → sister inherits S.mtr (== parent.mtr)
+    tw = _take_to_work_with_positions(
+        client_admin, code="SPL-MTR", title="mtr inherit",
+        mtr="MTR-PARENT-7",
+        positions=[{"name": "x", "qty": 5.0}],
+    )
+    proc_id = tw["procedure_id"]
+    src_pos_id = _first_position_id(client_admin, proc_id)
+
+    r = client_admin.post(
+        f"/procedures/{proc_id}/split",
+        json={"positions": [{"source_position_id": src_pos_id, "qty": 2.0}]},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["mtr"] == "MTR-PARENT-7"
+
+
+def test_split_mtr_override(client_admin):
+    tw = _take_to_work_with_positions(
+        client_admin, code="SPL-MTR2", title="mtr override",
+        mtr="MTR-ORIG",
+        positions=[{"name": "x", "qty": 5.0}],
+    )
+    proc_id = tw["procedure_id"]
+    src_pos_id = _first_position_id(client_admin, proc_id)
+
+    r = client_admin.post(
+        f"/procedures/{proc_id}/split",
+        json={
+            "positions": [{"source_position_id": src_pos_id, "qty": 2.0}],
+            "mtr": "MTR-OVERRIDE",
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["mtr"] == "MTR-OVERRIDE"
+
+
+# ---------------------------------------------------------------------------
+# Group B — split invariant 422
+# ---------------------------------------------------------------------------
+
+def test_split_over_available_422(client_admin):
+    tw = _take_to_work_with_positions(
+        client_admin, code="SPL-OV", title="over",
+        positions=[{"name": "x", "qty": 10.0}],
+    )
+    proc_id = tw["procedure_id"]
+    src_pos_id = _first_position_id(client_admin, proc_id)
+
+    r = client_admin.post(
+        f"/procedures/{proc_id}/split",
+        json={"positions": [{"source_position_id": src_pos_id, "qty": 11.0}]},
+    )
+    assert r.status_code == 422
+    assert "split qty exceeds available" in r.json()["detail"]
+
+
+def test_split_cumulative_at_cap_ok_then_over_422(client_admin):
+    tw = _take_to_work_with_positions(
+        client_admin, code="SPL-CUM", title="cumulative",
+        positions=[{"name": "x", "qty": 10.0}],
+    )
+    proc_id = tw["procedure_id"]
+    src_pos_id = _first_position_id(client_admin, proc_id)
+
+    # first split 6 → source reduced to 4 (OK, at the moving cap)
+    r1 = client_admin.post(
+        f"/procedures/{proc_id}/split",
+        json={"positions": [{"source_position_id": src_pos_id, "qty": 6.0}]},
+    )
+    assert r1.status_code == 200, r1.text
+
+    # second split 5 from remaining 4 → over → 422
+    r2 = client_admin.post(
+        f"/procedures/{proc_id}/split",
+        json={"positions": [{"source_position_id": src_pos_id, "qty": 5.0}]},
+    )
+    assert r2.status_code == 422
+
+    # but a split of exactly the remaining 4 → OK
+    r3 = client_admin.post(
+        f"/procedures/{proc_id}/split",
+        json={"positions": [{"source_position_id": src_pos_id, "qty": 4.0}]},
+    )
+    assert r3.status_code == 200, r3.text
+
+
+def test_split_qty_le_zero_422(client_admin):
+    tw = _take_to_work_with_positions(
+        client_admin, code="SPL-Z", title="zero",
+        positions=[{"name": "x", "qty": 10.0}],
+    )
+    proc_id = tw["procedure_id"]
+    src_pos_id = _first_position_id(client_admin, proc_id)
+
+    for bad in (0.0, -3.0):
+        r = client_admin.post(
+            f"/procedures/{proc_id}/split",
+            json={"positions": [{"source_position_id": src_pos_id, "qty": bad}]},
+        )
+        assert r.status_code == 422, (bad, r.text)
+
+
+def test_split_source_position_missing_404(client_admin):
+    tw = _take_to_work_with_positions(
+        client_admin, code="SPL-404", title="missing",
+        positions=[{"name": "x", "qty": 10.0}],
+    )
+    proc_id = tw["procedure_id"]
+
+    r = client_admin.post(
+        f"/procedures/{proc_id}/split",
+        json={"positions": [{"source_position_id": 99999, "qty": 1.0}]},
+    )
+    assert r.status_code == 404
+
+
+def test_split_source_belongs_to_other_procedure_404(client_admin):
+    # source position belongs to a different procedure → 404
+    tw_a = _take_to_work_with_positions(
+        client_admin, code="SPL-A", title="a",
+        positions=[{"name": "x", "qty": 10.0}],
+    )
+    tw_b = _take_to_work_with_positions(
+        client_admin, code="SPL-B", title="b",
+        positions=[{"name": "y", "qty": 10.0}],
+    )
+    pos_b = _first_position_id(client_admin, tw_b["procedure_id"])
+
+    r = client_admin.post(
+        f"/procedures/{tw_a['procedure_id']}/split",
+        json={"positions": [{"source_position_id": pos_b, "qty": 1.0}]},
+    )
+    assert r.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Group C — split proc collision + null proc
+# ---------------------------------------------------------------------------
+
+def test_split_proc_collision_409(client_admin):
+    tw_a = _take_to_work_with_positions(
+        client_admin, code="SPL-COL-A", title="a",
+        positions=[{"name": "x", "qty": 10.0}],
+    )
+    tw_b = _take_to_work_with_positions(
+        client_admin, code="SPL-COL-B", title="b",
+        positions=[{"name": "x", "qty": 10.0}],
+    )
+    # occupy a proc value on procedure A
+    client_admin.patch(f"/procedures/{tw_a['procedure_id']}", json={"proc": "COL-PROC"})
+    src_b = _first_position_id(client_admin, tw_b["procedure_id"])
+
+    r = client_admin.post(
+        f"/procedures/{tw_b['procedure_id']}/split",
+        json={"positions": [{"source_position_id": src_b, "qty": 1.0}], "proc": "COL-PROC"},
+    )
+    assert r.status_code == 409
+
+
+def test_split_null_proc_allowed(client_admin):
+    tw = _take_to_work_with_positions(
+        client_admin, code="SPL-NULL", title="n",
+        positions=[{"name": "x", "qty": 10.0}],
+    )
+    proc_id = tw["procedure_id"]
+    src_pos_id = _first_position_id(client_admin, proc_id)
+
+    # explicit null proc → OK (no collision with existing NULLs)
+    r = client_admin.post(
+        f"/procedures/{proc_id}/split",
+        json={"positions": [{"source_position_id": src_pos_id, "qty": 1.0}], "proc": None},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["proc"] is None
+
+
+# ---------------------------------------------------------------------------
+# Group D — split RBAC + audit
+# ---------------------------------------------------------------------------
+
+@pytest.fixture()
+def client_kompl_for_split(client_seeded, db_seeded, client_admin):
+    tw = _take_to_work_with_positions(
+        client_admin, code="RBAC-SPL", title="r",
+        positions=[{"name": "x", "qty": 10.0}],
+    )
+    proc_id = tw["procedure_id"]
+    u = _make_kompl_emp(db_seeded)
+    _login_as(client_seeded, u.email, "userpass123")
+    return client_seeded, proc_id
+
+
+def test_split_rbac_403_for_kompl(client_kompl_for_split):
+    client, proc_id = client_kompl_for_split
+    src = _first_position_id(client, proc_id)
+    r = client.post(
+        f"/procedures/{proc_id}/split",
+        json={"positions": [{"source_position_id": src, "qty": 1.0}]},
+    )
+    assert r.status_code == 403
+
+
+def test_split_audit_written(client_admin, db_seeded):
+    from app.models import AuditLog
+    tw = _take_to_work_with_positions(
+        client_admin, code="SPL-AUD", title="audit",
+        positions=[{"name": "x", "qty": 10.0}],
+    )
+    proc_id = tw["procedure_id"]
+    src_pos_id = _first_position_id(client_admin, proc_id)
+    client_admin.post(
+        f"/procedures/{proc_id}/split",
+        json={"positions": [{"source_position_id": src_pos_id, "qty": 1.0}]},
+    )
+    db_seeded.expire_all()
+    rows = (
+        db_seeded.query(AuditLog)
+        .filter_by(entity_kind="procedure", entity_id=proc_id, action="split")
+        .all()
+    )
+    assert len(rows) == 1
+
+
+# ---------------------------------------------------------------------------
+# Group E — positions GET (incl. price)
+# ---------------------------------------------------------------------------
+
+def test_positions_get_returns_with_price(client_admin):
+    tw = _take_to_work_with_positions(
+        client_admin, code="POS-GET", title="get",
+        positions=[{"name": "x", "qty": 10.0}],
+    )
+    proc_id = tw["procedure_id"]
+    # set a price via PATCH on the detail-level proc? price lives on position;
+    # use the positions PATCH endpoint once implemented to set price, but for
+    # GET we just assert price key present (nullable).
+    r = client_admin.get(f"/procedures/{proc_id}/positions")
+    assert r.status_code == 200, r.text
+    positions = r.json()
+    assert isinstance(positions, list)
+    assert len(positions) == 1
+    assert "price" in positions[0]
+    # asc by id — single row
+    assert positions[0]["name"] == "x"
+
+
+def test_positions_get_procedure_missing_404(client_admin):
+    r = client_admin.get("/procedures/99999/positions")
+    assert r.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Group F — positions POST mass insert (price + source_id=null); sourced over-cap 422
+# ---------------------------------------------------------------------------
+
+def test_positions_post_mass_insert_with_price_null_source(client_admin):
+    tw = _take_to_work_with_positions(
+        client_admin, code="POS-POST", title="post",
+        positions=[{"name": "x", "qty": 10.0}],
+    )
+    proc_id = tw["procedure_id"]
+    r = client_admin.post(
+        f"/procedures/{proc_id}/positions",
+        json=[
+            {"name": "Добавлено закупщиком", "qty": 3.0, "unit": "шт", "price": 123456},
+            {"name": "Ещё", "qty": 1.0, "price": None},
+        ],
+    )
+    assert r.status_code == 200, r.text
+    out = r.json()
+    assert len(out) == 2
+    assert out[0]["price"] == 123456
+    assert out[0]["source_id"] is None
+    assert out[1]["price"] is None
+    # persisted
+    r2 = client_admin.get(f"/procedures/{proc_id}/positions")
+    prices = {p["name"]: p["price"] for p in r2.json()}
+    assert prices["Добавлено закупщиком"] == 123456
+
+
+def test_positions_post_sourced_over_requested_422(client_admin):
+    tw = _take_to_work_with_positions(
+        client_admin, code="POS-SRC", title="sourced",
+        positions=[{"name": "x", "qty": 10.0}],
+    )
+    proc_id = tw["procedure_id"]
+    # after take-to-work the sourced position already occupies the full 10.0,
+    # so inserting another sourced position with qty>0 exceeds the cap.
+    src_pos = client_admin.get(f"/procedures/{proc_id}").json()["positions"][0]
+    source_id = src_pos["source_id"]
+
+    r = client_admin.post(
+        f"/procedures/{proc_id}/positions",
+        json=[{"name": "x", "qty": 1.0, "source_id": source_id}],
+    )
+    assert r.status_code == 422
+
+
+def test_positions_post_sourced_at_cap_zero_ok(client_admin):
+    # qty=0 sourced addition: Σ + 0 <= requested → OK (degenerate but allowed)
+    tw = _take_to_work_with_positions(
+        client_admin, code="POS-Z", title="zero add",
+        positions=[{"name": "x", "qty": 10.0}],
+    )
+    proc_id = tw["procedure_id"]
+    source_id = client_admin.get(f"/procedures/{proc_id}").json()["positions"][0]["source_id"]
+    r = client_admin.post(
+        f"/procedures/{proc_id}/positions",
+        json=[{"name": "x", "qty": 0.0, "source_id": source_id}],
+    )
+    assert r.status_code == 200, r.text
+
+
+def test_positions_post_procedure_missing_404(client_admin):
+    r = client_admin.post(
+        "/procedures/99999/positions",
+        json=[{"name": "x", "qty": 1.0}],
+    )
+    assert r.status_code == 404
+
+
+def test_positions_post_audit_written(client_admin, db_seeded):
+    from app.models import AuditLog
+    tw = _take_to_work_with_positions(
+        client_admin, code="POS-AUD", title="aud",
+        positions=[{"name": "x", "qty": 10.0}],
+    )
+    proc_id = tw["procedure_id"]
+    client_admin.post(
+        f"/procedures/{proc_id}/positions",
+        json=[{"name": "new", "qty": 1.0}],
+    )
+    db_seeded.expire_all()
+    rows = (
+        db_seeded.query(AuditLog)
+        .filter_by(entity_kind="procedure", entity_id=proc_id, action="positions_add")
+        .all()
+    )
+    assert len(rows) == 1
+
+
+# ---------------------------------------------------------------------------
+# Group G — positions PATCH (price kopecks; sourced qty over → 422; 404s)
+# ---------------------------------------------------------------------------
+
+def test_positions_patch_price_persists(client_admin):
+    tw = _take_to_work_with_positions(
+        client_admin, code="POS-PP", title="patch price",
+        positions=[{"name": "x", "qty": 10.0}],
+    )
+    proc_id = tw["procedure_id"]
+    pos_id = _first_position_id(client_admin, proc_id)
+
+    r = client_admin.patch(
+        f"/procedures/{proc_id}/positions/{pos_id}",
+        json={"price": 999999, "name": "Переименовано"},
+    )
+    assert r.status_code == 200, r.text
+    got = r.json()
+    assert got["price"] == 999999
+    assert got["name"] == "Переименовано"
+
+    # persisted
+    r2 = client_admin.get(f"/procedures/{proc_id}/positions")
+    target = next(p for p in r2.json() if p["id"] == pos_id)
+    assert target["price"] == 999999
+
+
+def test_positions_patch_qty_up_sourced_over_requested_422(client_admin):
+    tw = _take_to_work_with_positions(
+        client_admin, code="POS-PQ", title="patch qty",
+        positions=[{"name": "x", "qty": 10.0}],
+    )
+    proc_id = tw["procedure_id"]
+    pos_id = _first_position_id(client_admin, proc_id)
+
+    # sourced position already at the 10.0 cap; bumping qty → 11 exceeds → 422
+    r = client_admin.patch(
+        f"/procedures/{proc_id}/positions/{pos_id}",
+        json={"qty": 11.0},
+    )
+    assert r.status_code == 422
+
+
+def test_positions_patch_qty_same_sourced_ok(client_admin):
+    tw = _take_to_work_with_positions(
+        client_admin, code="POS-PQ2", title="same qty",
+        positions=[{"name": "x", "qty": 10.0}],
+    )
+    proc_id = tw["procedure_id"]
+    pos_id = _first_position_id(client_admin, proc_id)
+    # set qty to the same 10.0 → Σ unchanged → OK
+    r = client_admin.patch(
+        f"/procedures/{proc_id}/positions/{pos_id}",
+        json={"qty": 10.0},
+    )
+    assert r.status_code == 200, r.text
+
+
+def test_positions_patch_bad_procedure_404(client_admin):
+    tw = _take_to_work_with_positions(
+        client_admin, code="POS-404P", title="bad proc",
+        positions=[{"name": "x", "qty": 10.0}],
+    )
+    proc_id = tw["procedure_id"]
+    pos_id = _first_position_id(client_admin, proc_id)
+    # position belongs to proc_id, not 99999
+    r = client_admin.patch(
+        f"/procedures/99999/positions/{pos_id}",
+        json={"price": 1},
+    )
+    assert r.status_code == 404
+
+
+def test_positions_patch_bad_position_404(client_admin):
+    tw = _take_to_work_with_positions(
+        client_admin, code="POS-404POS", title="bad pos",
+        positions=[{"name": "x", "qty": 10.0}],
+    )
+    proc_id = tw["procedure_id"]
+    r = client_admin.patch(
+        f"/procedures/{proc_id}/positions/99999",
+        json={"price": 1},
+    )
+    assert r.status_code == 404
+
+
+def test_positions_patch_audit_written(client_admin, db_seeded):
+    from app.models import AuditLog
+    tw = _take_to_work_with_positions(
+        client_admin, code="POS-PA", title="aud",
+        positions=[{"name": "x", "qty": 10.0}],
+    )
+    proc_id = tw["procedure_id"]
+    pos_id = _first_position_id(client_admin, proc_id)
+    client_admin.patch(
+        f"/procedures/{proc_id}/positions/{pos_id}",
+        json={"price": 5},
+    )
+    db_seeded.expire_all()
+    rows = (
+        db_seeded.query(AuditLog)
+        .filter_by(entity_kind="procedure", entity_id=proc_id, action="position_update")
+        .all()
+    )
+    assert len(rows) == 1
+
+
+# ---------------------------------------------------------------------------
+# Group H — positions DELETE (removes + frees qty)
+# ---------------------------------------------------------------------------
+
+def test_positions_delete_removes_and_frees_qty(client_admin):
+    tw = _take_to_work_with_positions(
+        client_admin, code="POS-DEL", title="del",
+        positions=[{"name": "x", "qty": 10.0}],
+    )
+    proc_id = tw["procedure_id"]
+    pos_id = _first_position_id(client_admin, proc_id)
+    # capture the requested source_id BEFORE deleting (position list empties)
+    source_id = client_admin.get(
+        f"/procedures/{proc_id}"
+    ).json()["positions"][0]["source_id"]
+    assert source_id is not None
+
+    r = client_admin.delete(f"/procedures/{proc_id}/positions/{pos_id}")
+    assert r.status_code == 200, r.text
+    assert r.json() == {"ok": True}
+
+    # gone
+    r2 = client_admin.get(f"/procedures/{proc_id}/positions")
+    assert all(p["id"] != pos_id for p in r2.json())
+
+    # qty freed: now we can re-add a sourced position up to the requested qty
+    r3 = client_admin.post(
+        f"/procedures/{proc_id}/positions",
+        json=[{"name": "x", "qty": 10.0, "source_id": source_id}],
+    )
+    assert r3.status_code == 200, r3.text
+
+
+def _requested_id(client, proc_id):
+    """Resolve the requested_position id backing the first sourced position
+    of a procedure (via the procedure's tender → parent)."""
+    det = client.get(f"/procedures/{proc_id}").json()
+    if det["positions"]:
+        sid = det["positions"][0].get("source_id")
+        if sid is not None:
+            return sid
+    raise AssertionError("no source_id available to resolve requested id")
+
+
+def test_positions_delete_bad_position_404(client_admin):
+    tw = _take_to_work_with_positions(
+        client_admin, code="POS-DEL404", title="d",
+        positions=[{"name": "x", "qty": 10.0}],
+    )
+    proc_id = tw["procedure_id"]
+    r = client_admin.delete(f"/procedures/{proc_id}/positions/99999")
+    assert r.status_code == 404
+
+
+def test_positions_delete_audit_written(client_admin, db_seeded):
+    from app.models import AuditLog
+    tw = _take_to_work_with_positions(
+        client_admin, code="POS-DA", title="aud",
+        positions=[{"name": "x", "qty": 10.0}],
+    )
+    proc_id = tw["procedure_id"]
+    pos_id = _first_position_id(client_admin, proc_id)
+    client_admin.delete(f"/procedures/{proc_id}/positions/{pos_id}")
+    db_seeded.expire_all()
+    rows = (
+        db_seeded.query(AuditLog)
+        .filter_by(entity_kind="procedure", entity_id=proc_id, action="position_delete")
+        .all()
+    )
+    assert len(rows) == 1
+
+
+def test_positions_rbac_kompl_403(client_seeded, db_seeded, client_admin):
+    tw = _take_to_work_with_positions(
+        client_admin, code="POS-RBAC", title="r",
+        positions=[{"name": "x", "qty": 10.0}],
+    )
+    proc_id = tw["procedure_id"]
+    pos_id = _first_position_id(client_admin, proc_id)
+    u = _make_kompl_emp(db_seeded)
+    _login_as(client_seeded, u.email, "userpass123")
+    assert client_seeded.post(
+        f"/procedures/{proc_id}/positions", json=[{"name": "y", "qty": 1.0}]
+    ).status_code == 403
+    assert client_seeded.patch(
+        f"/procedures/{proc_id}/positions/{pos_id}", json={"price": 1}
+    ).status_code == 403
+    assert client_seeded.delete(
+        f"/procedures/{proc_id}/positions/{pos_id}"
+    ).status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Group I — to-support
+# ---------------------------------------------------------------------------
+
+def test_to_support_from_na_sdelku(client_admin, db_seeded):
+    from app.models import Procedure
+    tw = _take_to_work_with_positions(
+        client_admin, code="TS-OK", title="to support",
+        positions=[{"name": "x", "qty": 10.0}],
+    )
+    proc_id = tw["procedure_id"]
+    # advance to 'На сделку' via PATCH
+    client_admin.patch(f"/procedures/{proc_id}", json={"status_zakup": "На сделку"})
+
+    r = client_admin.post(f"/procedures/{proc_id}/to-support")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["block"] == "soprovozhdenie"
+    # status_postavki is set on the row (verified via DB below) but is NOT
+    # exposed in ProcedureDetail (locked 5.1 schema omits it).
+    # status_zakup left unchanged (still 'На сделку')
+    assert body["status_zakup"] == "На сделку"
+
+    # block_entered_at set (server-side; check the row)
+    db_seeded.expire_all()
+    proc = db_seeded.get(Procedure, proc_id)
+    assert proc.block == "soprovozhdenie"
+    assert proc.status_postavki == "Новая"
+    assert proc.block_entered_at is not None
+
+    # procedure gone from /procurement (default AND include_archived — block!=zakupka)
+    r_def = client_admin.get("/procurement")
+    assert proc_id not in {it["id"] for it in r_def.json()["items"]}
+    r_arch = client_admin.get("/procurement?include_archived=1")
+    assert proc_id not in {it["id"] for it in r_arch.json()["items"]}
+
+
+def test_to_support_from_novaya_409(client_admin):
+    tw = _take_to_work_with_positions(
+        client_admin, code="TS-NOV", title="nov",
+        positions=[{"name": "x", "qty": 10.0}],
+    )
+    proc_id = tw["procedure_id"]
+    # status_zakup == 'Новая' right after take-to-work
+    r = client_admin.post(f"/procedures/{proc_id}/to-support")
+    assert r.status_code == 409
+
+
+def test_to_support_from_otmenena_409(client_admin):
+    tw = _take_to_work_with_positions(
+        client_admin, code="TS-OTM", title="otm",
+        positions=[{"name": "x", "qty": 10.0}],
+    )
+    proc_id = tw["procedure_id"]
+    client_admin.post(f"/procedures/{proc_id}/cancel")
+    r = client_admin.post(f"/procedures/{proc_id}/to-support")
+    assert r.status_code == 409
+
+
+def test_to_support_from_other_status_409(client_admin):
+    tw = _take_to_work_with_positions(
+        client_admin, code="TS-OTH", title="oth",
+        positions=[{"name": "x", "qty": 10.0}],
+    )
+    proc_id = tw["procedure_id"]
+    # 'Торги' is a valid dict status but != 'На сделку'
+    client_admin.patch(f"/procedures/{proc_id}", json={"status_zakup": "Торги"})
+    r = client_admin.post(f"/procedures/{proc_id}/to-support")
+    assert r.status_code == 409
+
+
+def test_to_support_missing_404(client_admin):
+    r = client_admin.post("/procedures/99999/to-support")
+    assert r.status_code == 404
+
+
+def test_to_support_rbac_403(client_seeded, db_seeded, client_admin):
+    tw = _take_to_work_with_positions(
+        client_admin, code="TS-RBAC", title="r",
+        positions=[{"name": "x", "qty": 10.0}],
+    )
+    proc_id = tw["procedure_id"]
+    client_admin.patch(f"/procedures/{proc_id}", json={"status_zakup": "На сделку"})
+    u = _make_kompl_emp(db_seeded)
+    _login_as(client_seeded, u.email, "userpass123")
+    r = client_seeded.post(f"/procedures/{proc_id}/to-support")
+    assert r.status_code == 403
+
+
+def test_to_support_audit_written(client_admin, db_seeded):
+    from app.models import AuditLog
+    tw = _take_to_work_with_positions(
+        client_admin, code="TS-AUD", title="aud",
+        positions=[{"name": "x", "qty": 10.0}],
+    )
+    proc_id = tw["procedure_id"]
+    client_admin.patch(f"/procedures/{proc_id}", json={"status_zakup": "На сделку"})
+    client_admin.post(f"/procedures/{proc_id}/to-support")
+    db_seeded.expire_all()
+    rows = (
+        db_seeded.query(AuditLog)
+        .filter_by(entity_kind="procedure", entity_id=proc_id, action="to_support")
+        .all()
+    )
+    assert len(rows) == 1
