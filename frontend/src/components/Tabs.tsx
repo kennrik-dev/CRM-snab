@@ -1,6 +1,7 @@
 import { NavLink } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { listRequests } from '../api/requests'
+import { listProcurements } from '../api/procedures'
 
 type TabDef = { to: string; label: string; showCounter?: boolean }
 
@@ -13,22 +14,24 @@ const TABS: TabDef[] = [
   { to: '/otchety', label: 'Отчёты' },
 ]
 
-// Single shared query for all tab counters. We fetch page_size=1 so the
-// backend only sends the `total` count and no payload rows.
-// Other tabs (zakupka, soprovozhdenie, oplaty) are placeholders for now — they
-// still render `—` until their endpoints are wired up.
-const COUNTERS_QUERY_KEY = ['requests', { tabCounter: true }] as const
-
-function useTabCounters() {
-  return useQuery({
-    queryKey: COUNTERS_QUERY_KEY,
-    queryFn: () => listRequests({ page_size: 1 }),
-  })
-}
+// Counter queries fetch page_size=1 so the backend only sends the `total`
+// count and no payload rows.
+// Other tabs (soprovozhdenie, oplaty) are placeholders for now — they still
+// render `—` until their endpoints are wired up.
+const KOMPL_COUNTER_KEY = ['requests', { tabCounter: true }] as const
+const ZAKUP_COUNTER_KEY = ['procurements', { tabCounter: true }] as const
 
 export function Tabs() {
-  const counters = useTabCounters()
-  const komplTotal = counters.data?.total
+  const kompl = useQuery({
+    queryKey: KOMPL_COUNTER_KEY,
+    queryFn: () => listRequests({ page_size: 1 }),
+  })
+  const zakup = useQuery({
+    queryKey: ZAKUP_COUNTER_KEY,
+    queryFn: () => listProcurements({ page_size: 1 }),
+  })
+  const komplTotal = kompl.data?.total
+  const zakupTotal = zakup.data?.total
 
   return (
     <div className="tabs">
@@ -36,9 +39,11 @@ export function Tabs() {
         const count =
           t.to === '/komplektaciya'
             ? (komplTotal ?? '—')
-            : t.showCounter
-              ? '—'
-              : null
+            : t.to === '/zakupka'
+              ? (zakupTotal ?? '—')
+              : t.showCounter
+                ? '—'
+                : null
         return (
           <NavLink
             key={t.to}
