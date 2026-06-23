@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type CSSProperties } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { Chip, type ChipKind } from '../components/Chip'
 import { DataTable, type DataTableColumn } from '../components/DataTable'
@@ -156,6 +157,7 @@ function buildColumns(): DataTableColumn<NumberedProc>[] {
 // ---- Page -----------------------------------------------------------------
 
 export function Zakupka() {
+  const navigate = useNavigate()
   const { permissions } = useAuth()
   const canEditZakup = canEdit(permissions, 'zakupka')
 
@@ -294,6 +296,7 @@ export function Zakupka() {
               columns={columns}
               rows={numbered}
               getRowId={(r) => r.id}
+              onRowClick={(row) => navigate(`/zakupka/${row.id}`)}
               empty={
                 <EmptyState
                   title={hasFilterApplied ? 'Ничего не найдено' : 'Нет процедур'}

@@ -48,6 +48,12 @@ export type PositionTableColumn<T> = {
   mono?: boolean
   /** Disable editing for this column. */
   readOnly?: boolean
+  /**
+   * Display-only formatter for the non-editing cell render. The editing
+   * <input> still uses the raw value. When omitted, the raw value is shown
+   * (or '—' / '' per the mono rule below).
+   */
+  format?: (value: string) => string
 }
 
 type Props<T> = {
@@ -515,7 +521,7 @@ export function PositionTable<T>({
                       onClick={() => onCellClick(ri, displayCol)}
                       onDoubleClick={() => onCellDoubleClick(ri, displayCol)}
                     >
-                      {value || (c.mono ? '' : '—')}
+                      {c.format ? c.format(value) : (value || (c.mono ? '' : '—'))}
                     </td>
                   )
                 })}
