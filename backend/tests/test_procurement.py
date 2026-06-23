@@ -1050,6 +1050,74 @@ def test_split_audit_written(client_admin, db_seeded):
     assert len(rows) == 1
 
 
+def test_split_multi_item_later_failure_is_atomic(client_admin):
+    """A 422 on a later item must leave the DB untouched: no sister created,
+    no source qty changed. Regression for the per-item-commit bug (a mid-loop
+    422 used to persist the sister + earlier items' transfers)."""
+    tw = _take_to_work_with_positions(
+        client_admin, code="SPL-ATOM", title="atomic",
+        positions=[
+            {"name": "A", "qty": 10.0},
+            {"name": "B", "qty": 5.0},
+        ],
+    )
+    proc_id = tw["procedure_id"]
+    detail = client_admin.get(f"/procedures/{proc_id}").json()
+    pos_a = next(p for p in detail["positions"] if p["name"] == "A")
+    pos_b = next(p for p in detail["positions"] if p["name"] == "B")
+
+    # item 1 valid (6 ≤ 10), item 2 invalid (99 > 5) → whole request 422.
+    r = client_admin.post(
+        f"/procedures/{proc_id}/split",
+        json={
+            "positions": [
+                {"source_position_id": pos_a["id"], "qty": 6.0},
+                {"source_position_id": pos_b["id"], "qty": 99.0},
+            ],
+            "supplier": "Atom",
+        },
+    )
+    assert r.status_code == 422
+
+    # Atomic: no sister created — still exactly the one zakupka procedure.
+    lst = client_admin.get("/procurement").json()
+    assert lst["total"] == 1
+    assert [it["id"] for it in lst["items"]] == [proc_id]
+
+    # Atomic: source positions unchanged.
+    detail2 = client_admin.get(f"/procedures/{proc_id}").json()
+    a = next(p for p in detail2["positions"] if p["id"] == pos_a["id"])
+    b = next(p for p in detail2["positions"] if p["id"] == pos_b["id"])
+    assert a["qty"] == 10.0
+    assert b["qty"] == 5.0
+
+
+def test_split_same_source_cumulative_over_draw_is_atomic(client_admin):
+    """Two items over-drawing the SAME source position → 422, and the first
+    item's draw is NOT applied (atomic)."""
+    tw = _take_to_work_with_positions(
+        client_admin, code="SPL-ATOM2", title="atomic same src",
+        positions=[{"name": "only", "qty": 10.0}],
+    )
+    proc_id = tw["procedure_id"]
+    src = _first_position_id(client_admin, proc_id)
+
+    r = client_admin.post(
+        f"/procedures/{proc_id}/split",
+        json={
+            "positions": [
+                {"source_position_id": src, "qty": 6.0},
+                {"source_position_id": src, "qty": 6.0},
+            ]
+        },
+    )
+    assert r.status_code == 422
+    # Atomic: source unchanged, no sister created.
+    assert client_admin.get("/procurement").json()["total"] == 1
+    after = client_admin.get(f"/procedures/{proc_id}").json()
+    assert after["positions"][0]["qty"] == 10.0
+
+
 # ---------------------------------------------------------------------------
 # Group E — positions GET (incl. price)
 # ---------------------------------------------------------------------------

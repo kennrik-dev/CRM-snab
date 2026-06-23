@@ -440,7 +440,38 @@ def split_procedure(
                 detail="proc already exists",
             )
 
-    # Create the sister procedure in the SAME tender.
+    # --- Validation pre-pass: load every source position, verify each belongs
+    # to S, and check the CUMULATIVE draw per source position (multiple items
+    # may reference the same position) does not exceed its available qty. All
+    # checks run BEFORE any mutation, so a 422/404 leaves the DB untouched
+    # (atomic). Per docs/01-domain-model.md §2.4 (Σ распределённого ≤
+    # запрошенного); Pydantic Field(gt=0) already rejects qty ≤ 0.
+    sources: dict[int, list] = {}  # source_position_id -> [ProcedurePosition, drawn]
+    for item in payload.positions:
+        slot = sources.get(item.source_position_id)
+        if slot is None:
+            sp = db.get(ProcedurePosition, item.source_position_id)
+            if sp is None or sp.procedure_id != S.id:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="source position not found",
+                )
+            slot = [sp, 0.0]
+            sources[item.source_position_id] = slot
+        sp, drawn = slot
+        new_drawn = drawn + item.qty
+        if new_drawn > sp.qty + _QTY_TOLERANCE:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="split qty exceeds available",
+            )
+        slot[1] = new_drawn
+
+    # --- Apply pass: create the sister in the SAME tender and transfer
+    # positions (MOVE: reduce source, sister receives the transferred qty).
+    # No validation raises are possible here (pre-pass passed), so this is one
+    # atomic transaction — a single commit at the end persists everything or
+    # nothing.
     sister = Procedure(
         tender_id=S.tender_id,
         block="zakupka",
@@ -451,23 +482,10 @@ def split_procedure(
         mtr=payload.mtr if payload.mtr is not None else S.mtr,
     )
     db.add(sister)
-    db.commit()
-    db.refresh(sister)
+    db.flush()  # assign sister.id without committing
 
     for item in payload.positions:
         sp = db.get(ProcedurePosition, item.source_position_id)
-        if sp is None or sp.procedure_id != S.id:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="source position not found",
-            )
-        # Binding invariant: 0 < qty <= available (sp.qty). Pydantic enforces >0.
-        if item.qty > sp.qty + _QTY_TOLERANCE:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="split qty exceeds available",
-            )
-
         # Sister position inherits the source's catalog fields + source_id + price.
         db.add(
             ProcedurePosition(
@@ -481,14 +499,15 @@ def split_procedure(
                 price=sp.price,
             )
         )
-
         # Reduce the source position; fully-transferred → delete.
         remaining = sp.qty - item.qty
         if abs(remaining) < _QTY_TOLERANCE:
             db.delete(sp)
         else:
             sp.qty = remaining
-        db.commit()
+
+    db.commit()  # atomic: sister + all transfers persist together
+    db.refresh(sister)
 
     write_audit(
         db,
