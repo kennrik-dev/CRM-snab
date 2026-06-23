@@ -164,20 +164,86 @@ Mirror `test_requests.py` fixtures: `db_seeded`, `client_seeded`, `client_admin`
 
 ---
 
-## Sub-task 5.2 — Backend: разбиение + позиции с ценой + to-support  *(roadmap — expand at ⏸ gate)*
+## Sub-task 5.2 — Backend: разбиение + позиции с ценой + to-support
 
-**Files:** modify `routers/procurement.py`, `schemas/procedures.py`, `tests/test_procurement.py`.
+**Files:** modify `backend/app/routers/procurement.py`, `backend/app/schemas/procedures.py`, `backend/tests/test_procurement.py`. **No migration** — reuses existing `ProcedurePosition.price`/`source_id`; `status_postavki` CHECK already allows `'Новая'` (models.py:182-187).
 
-**Produces:** `SplitIn`, `ProcedurePositionIn`, `ProcedurePositionPatch` (schemas); endpoints `POST /procedures/{id}/split`, `GET|POST|PATCH|DELETE /procedures/{id}/positions`, `POST /procedures/{id}/to-support`.
+**Spec (source of truth):** `docs/01-domain-model.md` §2.4 invariant — «для одной запрошенной позиции Σ(qty позиций процедур, ссылающихся на неё) ≤ qty запрошенной»; §3.3 — «Σ распределённого ≤ запрошенного»; `docs/31-api.md` §3; `docs/02-statuses.md` §3/§122 (to-support from `На сделку`).
 
-**Key invariants:**
-- `split {positions:[{source_position_id, qty}], supplier?}` → new Procedure (same `tender_id`, `block='zakupka'`, `proc=None`, `status_zakup='Новая'`, `block_entered_at=now`); transfers named positions (qty=transferred) from source → sister. **Σ qty per `source_id` across ALL procedures ≤ `requested_position.qty`** → else **422**. Check is server-side, cross-procedure, atomic with the insert.
-- `/positions` CRUD: `price` INTEGER kopecks (nullable); mass insert; `source_id=null` for purchaser-added; copy-row.
-- `to-support`: only from `status_zakup=='На сделку'` → `block='soprovozhdenie'`, `status_postavki='Новая'`, `block_entered_at=now ISO UTC`; else **409**. Verify `procedure_status_postavki_check` accepts `'Новая'` (it does — models.py:182-187). Procedure leaves `/procurement` active list.
+**Semantics — split is MOVE:** the source position's qty is reduced and the sister receives the transferred qty, so Σ per `source_id` is preserved by each split. Therefore the **binding check is `0 < item.qty ≤ source_position.qty` → else 422** (this is what enforces Σ≤requested, since a healthy DB starts at the cap after take-to-work and moves preserve it). PATCH/POST of a sourced position's qty must re-check the global Σ≤requested.
 
-**Test behaviors:** split happy-path (sister appears in list, source qty decremented), invariant 422 (single + cumulative), positions price CRUD, to-support 200/409 matrix, RBAC 403, audit.
+**Produces (consumed by 5.3):** `SplitItem`, `SplitIn`, `ProcedurePositionIn`, `ProcedurePositionPatch` (schemas); endpoints below.
 
-**→ ⏸ STOP after 5.2.** Verify: `pytest` (split invariant + to-support 409 are the critical ones).
+### Schemas (add to `schemas/procedures.py`)
+
+```python
+class SplitItem(BaseModel):
+    source_position_id: int
+    qty: float = Field(gt=0)
+
+class SplitIn(BaseModel):
+    positions: list[SplitItem] = Field(min_length=1)
+    supplier: Optional[str] = None
+    proc: Optional[str] = None      # sister's № процедуры (unique; NULL ok)
+    mtr: Optional[str] = None       # sister's МТР override (else inherit source's)
+
+class ProcedurePositionIn(BaseModel):
+    name: str = Field(min_length=1)
+    qty: float
+    unit: Optional[str] = None
+    gost_tu: Optional[str] = None
+    doc_code: Optional[str] = None
+    price: Optional[int] = None     # INTEGER kopecks
+    source_id: Optional[int] = None # null = added by purchaser (no cap)
+
+class ProcedurePositionPatch(BaseModel):
+    name: Optional[str] = None
+    qty: Optional[float] = None
+    unit: Optional[str] = None
+    gost_tu: Optional[str] = None
+    doc_code: Optional[str] = None
+    price: Optional[int] = None
+```
+
+### Invariant helper (in `routers/procurement.py`)
+
+```python
+def _source_total_qty(db, source_id):
+    return db.query(func.coalesce(func.sum(ProcedurePosition.qty), 0)) \
+             .filter(ProcedurePosition.source_id == source_id).scalar() or 0
+```
+Compare sums to `requested.qty` with float tolerance (`+ 1e-9`).
+
+### Endpoint contracts
+
+- **`POST /procedures/{id}/split`** body `SplitIn` → `ProcedureDetail` (the NEW sister). Dep `require_action('zakupka','edit')`. 404 if source missing.
+  - Create sister N: `tender_id=S.tender_id`, `block='zakupka'`, `status_zakup='Новая'`, `block_entered_at=datetime.now(timezone.utc).isoformat()`, `supplier=payload.supplier`, `proc=payload.proc`, `mtr=payload.mtr if payload.mtr is not None else S.mtr`. If non-null `proc` collides → 409.
+  - For each item: load `ProcedurePosition(source_position_id)`; 404 if missing or `procedure_id != S.id`. **`0 < item.qty ≤ sp.qty` else 422** `"split qty exceeds available"`. Create NP in N copying `name/unit/gost_tu/doc_code/source_id/price` from sp, `qty=item.qty`. Then `sp.qty -= item.qty`; **if `sp.qty == 0` delete sp** (fully transferred) else keep remainder.
+  - audit `entity_kind='procedure'`, `entity_id=S.id`, `action='split'`. Return `_build_detail(db, N)`.
+
+- **`GET /procedures/{id}/positions`** → `list[ProcedurePositionOut]`. Dep `require_password_changed`. 404 if procedure missing. Asc by id.
+- **`POST /procedures/{id}/positions`** body `list[ProcedurePositionIn]` → `list[ProcedurePositionOut]` (mass insert). Dep `require_action('zakupka','edit')`. 404 if procedure missing. For each: if `source_id` set → **Σ(source_id) + new.qty ≤ requested.qty else 422**; insert with `price` kopecks. audit `action='positions_add'`.
+- **`PATCH /procedures/{id}/positions/{pos_id}`** body `ProcedurePositionPatch` → `ProcedurePositionOut`. Dep `require_action('zakupka','edit')`. 404 if procedure/position missing or `pos.procedure_id != id`. If `qty` changes and `pos.source_id` not null → **new_total = Σ(source_id) − old.qty + new.qty ≤ requested.qty else 422**. Apply `name/qty/unit/gost_tu/doc_code/price`. audit `action='position_update'`.
+- **`DELETE /procedures/{id}/positions/{pos_id}`** → `{ok:true}`. Dep `require_action('zakupka','edit')`. 404 checks. Delete (frees qty — always safe). audit `action='position_delete'`.
+- **`POST /procedures/{id}/to-support`** → `ProcedureDetail`. Dep `require_action('zakupka','edit')`. 404 if missing. **409 if `status_zakup != 'На сделку'`** (covers Новая/Отменена/other). Set `block='soprovozhdenie'`, `status_postavki='Новая'`, `block_entered_at=now ISO UTC` (leave `status_zakup` as-is). audit `action='to_support'`. Procedure then leaves `/procurement` (block≠zakupka).
+
+### Test behaviors (add to `tests/test_procurement.py`)
+
+Reuse the 5.1 harness (`db_seeded`/`client_admin`/`_make_zakup_emp`/`_make_kompl_emp`/`_take_to_work`).
+- [ ] split happy: source pos qty=10 → split qty=4 → sister N appears in `/procurement` (total +1), N's position qty=4 with `source_id` preserved, source pos qty=6; split qty=10 (full) → source position deleted, sister holds qty=10.
+- [ ] split invariant 422: split qty=11 from qty=10 → 422; cumulative splits reaching the cap OK, over-cap → 422; `qty≤0` → 422 (Pydantic/validation).
+- [ ] split `proc` collision → 409; `proc=None` allowed (no collision with existing NULLs).
+- [ ] split RBAC: kompl emp → 403; audit row (`action='split'`) written.
+- [ ] positions GET returns positions incl. `price`.
+- [ ] positions POST mass insert with `price` + `source_id=null`; POST sourced position that would exceed requested → 422.
+- [ ] positions PATCH `price` (kopecks) persists; PATCH `qty` up beyond requested (sourced) → 422; PATCH 404s (bad proc / bad pos).
+- [ ] positions DELETE removes + frees qty.
+- [ ] to-support from `'На сделку'` → `block='soprovozhdenie'`, `status_postavki='Новая'`, `block_entered_at` set, procedure gone from `/procurement` (default + include_archived — it's not zakupka); from `'Новая'`/`'Отменена'`/other → 409; 404 unknown; RBAC 403; audit.
+
+### Commands
+- `cd backend && "$PY" -m pytest tests/test_procurement.py -v` (red→green per group); then `"$PY" -m pytest -q` (no regressions). Commits per endpoint group; only `git add` the 3 files (procurement.py, schemas/procedures.py, test_procurement.py).
+
+**→ ⏸ STOP after 5.2.** Verify: split invariant 422 + to-support 409 matrix are the critical tests.
 
 ---
 
