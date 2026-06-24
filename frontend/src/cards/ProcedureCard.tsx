@@ -28,7 +28,7 @@ import {
 } from '../api/procedures'
 import { getRequest, type ProcedureOut } from '../api/requests'
 import { listDict, type DictValue } from '../api/dict'
-import { procStatusChip } from '../pages/Zakupka'
+import { procStatusChip, STATUS_KIND_COLOR } from '../pages/Zakupka'
 import { dateRu, money } from '../lib/format'
 import { canEdit } from '../lib/permissions'
 import { kopecksToRublesInput, rublesToKopecks } from '../lib/money'
@@ -854,7 +854,11 @@ function HeaderEditPanel({
         <div style={headerFieldStyle}>
           <label style={headerLabelStyle}>Статус закупки</label>
           <select
-            style={headerInputStyle}
+            style={{
+              ...headerInputStyle,
+              fontWeight: 600,
+              ...STATUS_KIND_COLOR[procStatusChip(draft.status_zakup || '').kind],
+            }}
             value={
               (statusOptions ?? []).some(
                 (o) => o.value === draft.status_zakup,

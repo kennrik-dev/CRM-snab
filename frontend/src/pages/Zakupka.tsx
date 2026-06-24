@@ -45,16 +45,42 @@ function useDebounced<T>(value: T, delay: number): T {
 
 // ---- Status → chip mapping (pure, unit-tested) ----------------------------
 
-// The backend list returns `status_zakup` as one of the seeded dict values
-// (Новая/Торги/…) or NULL (treated as «В закупке») or «Отменена» (service-set).
-// Mapping: Отменена → cancel chip; everything else → proc chip. A null status
-// is labelled «В закупке»; a known dict value keeps its label verbatim.
+// Each status_zakup value gets its OWN color (like Комплектация's colored
+// chips), so the 6 справочник values + «Новая» + «Отменена» are visually
+// distinct at a glance. Hues reuse the stage palette where they fit, plus a
+// dedicated «teal» for «Согласование» (the stage palette only has 6 hues).
+const STATUS_KIND: Record<string, ChipKind> = {
+  'Приём заявок': 'proc',
+  'Торги': 'supp',
+  'Тех. экспертиза': 'pay',
+  'Дозапросы': 'late',
+  'Согласование': 'teal',
+  'На сделку': 'ok',
+}
+
 export function procStatusChip(
   status_zakup: string | null | undefined,
 ): { kind: ChipKind; label: string } {
   if (status_zakup === 'Отменена') return { kind: 'cancel', label: 'Отменена' }
-  if (!status_zakup) return { kind: 'proc', label: 'В закупке' }
-  return { kind: 'proc', label: status_zakup }
+  if (!status_zakup || status_zakup === '') return { kind: 'wait', label: 'В закупке' }
+  if (status_zakup === 'Новая') return { kind: 'wait', label: 'Новая' }
+  return { kind: STATUS_KIND[status_zakup] ?? 'proc', label: status_zakup }
+}
+
+// ChipKind → CSS color vars, so the inline row <select> (editor) matches the
+// colored chip (read-only). Exported for ProcedureCard's status select too.
+export const STATUS_KIND_COLOR: Record<
+  ChipKind,
+  { color: string; background: string }
+> = {
+  wait: { color: 'var(--wait)', background: 'var(--wait-bg)' },
+  proc: { color: 'var(--proc)', background: 'var(--proc-bg)' },
+  supp: { color: 'var(--supp)', background: 'var(--supp-bg)' },
+  pay: { color: 'var(--pay)', background: 'var(--pay-bg)' },
+  ok: { color: 'var(--ok)', background: 'var(--ok-bg)' },
+  late: { color: 'var(--late)', background: 'var(--late-bg)' },
+  teal: { color: 'var(--teal)', background: 'var(--teal-bg)' },
+  cancel: { color: 'var(--muted)', background: 'var(--wait-bg)' },
 }
 
 // ---- Procedure column definitions -----------------------------------------
@@ -167,6 +193,8 @@ function buildColumns({
         const opts = statusOptions ?? []
         const current = row.status_zakup
         const inOpts = current != null && opts.includes(current)
+        // Color the select by the current status (matches the read-only chip).
+        const kind = procStatusChip(current).kind
         return (
           <select
             value={inOpts ? current : ''}
@@ -181,11 +209,13 @@ function buildColumns({
             title={current ?? '—'}
             style={{
               width: '100%',
-              padding: '3px 4px',
-              fontSize: 12,
-              borderRadius: 3,
-              border: '1px solid var(--line)',
-              background: 'var(--surface)',
+              padding: '3px 8px',
+              fontSize: 11,
+              fontWeight: 600,
+              borderRadius: 5,
+              border: 'none',
+              cursor: 'pointer',
+              ...STATUS_KIND_COLOR[kind],
             }}
           >
             {/* Current status not in the dict (Новая / null / Отменена): show
