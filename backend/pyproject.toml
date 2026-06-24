@@ -12,6 +12,7 @@ dependencies = [
     "bcrypt>=5",
     "itsdangerous",
     "python-multipart",
+    "tzdata",  # IANA tz db for ZoneInfo("Europe/Moscow") — Windows has no system db
 ]
 
 [project.optional-dependencies]
