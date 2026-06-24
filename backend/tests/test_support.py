@@ -354,3 +354,49 @@ def test_delete_delivery_with_upd_409(client_admin):
 
 def test_delete_delivery_not_found_404(client_admin):
     assert client_admin.delete("/deliveries/99999").status_code == 404
+
+
+# --- 6.2e: PATCH delivery -------------------------------------------------------
+
+def test_patch_delivery_done_sets_date(client_admin):
+    proc_id = _to_support(client_admin, "PAT-D1", "done", [{"name": "x", "qty": 2.0}])
+    pid = _position_ids(client_admin, proc_id)[0]
+    d = client_admin.post(f"/procedures/{proc_id}/deliveries", json={"positions": [pid]}).json()
+    r = client_admin.patch(f"/deliveries/{d['id']}", json={"status": "done"})
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "done"
+    assert r.json()["date"] is not None          # auto-set (today ISO)
+
+
+def test_patch_delivery_done_then_change_status_409(client_admin):
+    proc_id = _to_support(client_admin, "PAT-D2", "done2", [{"name": "x", "qty": 2.0}])
+    pid = _position_ids(client_admin, proc_id)[0]
+    d = client_admin.post(f"/procedures/{proc_id}/deliveries", json={"positions": [pid]}).json()
+    client_admin.patch(f"/deliveries/{d['id']}", json={"status": "done"})
+    r = client_admin.patch(f"/deliveries/{d['id']}", json={"status": "transit"})
+    assert r.status_code == 409
+
+
+def test_patch_delivery_doc_flags_toggle(client_admin):
+    proc_id = _to_support(client_admin, "PAT-DOC", "docs", [{"name": "x", "qty": 2.0}])
+    pid = _position_ids(client_admin, proc_id)[0]
+    d = client_admin.post(f"/procedures/{proc_id}/deliveries", json={"positions": [pid]}).json()
+    r = client_admin.patch(f"/deliveries/{d['id']}",
+                           json={"doc_ttn": 1, "doc_sert": 1})
+    assert r.status_code == 200, r.text
+    got = r.json()
+    assert got["doc_ttn"] == 1 and got["doc_sert"] == 1
+    assert got["doc_m15"] == 0 and got["doc_upd"] == 0
+
+
+def test_patch_delivery_eta(client_admin):
+    proc_id = _to_support(client_admin, "PAT-ETA", "eta", [{"name": "x", "qty": 2.0}])
+    pid = _position_ids(client_admin, proc_id)[0]
+    d = client_admin.post(f"/procedures/{proc_id}/deliveries", json={"positions": [pid]}).json()
+    r = client_admin.patch(f"/deliveries/{d['id']}", json={"eta": "2026-07-15"})
+    assert r.status_code == 200
+    assert r.json()["eta"] == "2026-07-15"
+
+
+def test_patch_delivery_not_found_404(client_admin):
+    assert client_admin.patch("/deliveries/99999", json={"eta": "2026-07-15"}).status_code == 404

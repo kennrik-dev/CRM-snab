@@ -256,3 +256,38 @@ def delete_delivery(
     write_audit(db, entity_kind="procedure", entity_id=proc_id,
                 user=current_user, action="delivery_delete")
     return {"ok": True}
+
+
+@router.patch("/deliveries/{delivery_id}", response_model=DeliveryOut)
+def patch_delivery(
+    delivery_id: int,
+    payload: DeliveryPatch,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_action("soprovozhdenie", "edit")),
+) -> DeliveryOut:
+    d = db.get(Delivery, delivery_id)
+    if d is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="delivery not found")
+    data = payload.model_dump(exclude_unset=True)
+
+    if "status" in data and data["status"] is not None:
+        if data["status"] not in ("transit", "done"):
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                detail="invalid status")
+        if d.status == "done":
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                                detail="delivery already received")
+        if data["status"] == "done":
+            d.status = "done"
+            if not d.date:                         # Решение 3: auto дата приёмки
+                d.date = calc.today_moscow().isoformat()
+
+    for f in ("date", "eta", "doc_ttn", "doc_m15", "doc_upd", "doc_sert"):
+        if f in data:
+            setattr(d, f, data[f])
+
+    db.commit()
+    db.refresh(d)
+    write_audit(db, entity_kind="procedure", entity_id=d.procedure_id,
+                user=current_user, action="delivery_update")
+    return _delivery_out(db, d)
