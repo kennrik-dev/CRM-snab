@@ -9,6 +9,7 @@
   --ok:#0f7a3d;    --ok-bg:#e1f2e7;
   --late:#c81e1e;  --late-bg:#fbe5e5;
   --teal:#0e7490;  --teal-bg:#e0eefc;
+  --rose:#be185d;  --rose-bg:#fce8f1;
   --signal:#f5b91e;
   --r:7px; --mono:"IBM Plex Mono",ui-monospace,monospace;
   --cond:"IBM Plex Sans Condensed",sans-serif; --sans:"IBM Plex Sans",system-ui,sans-serif;
@@ -127,7 +128,7 @@ table.reg.fixed{table-layout:fixed}
 .chip.supp{color:var(--supp);background:var(--supp-bg)}.chip.pay{color:var(--pay);background:var(--pay-bg)}
 .chip.ok{color:var(--ok);background:var(--ok-bg)}.chip.late{color:var(--late);background:var(--late-bg)}
 .chip.cancel{color:var(--muted);background:var(--wait-bg);text-decoration:line-through}
-.chip.teal{color:var(--teal);background:var(--teal-bg)}
+.chip.teal{color:var(--teal);background:var(--teal-bg)}.chip.rose{color:var(--rose);background:var(--rose-bg)}
 .chip.mini{font-size:10px;padding:2px 7px}
 /* overdue % */
 .ovd{font-family:var(--mono);font-size:12px;font-weight:600;padding:2px 8px;border-radius:20px;background:var(--ok-bg);color:var(--ok)}

@@ -1,4 +1,4 @@
-export type ChipKind = 'wait' | 'proc' | 'supp' | 'pay' | 'ok' | 'late' | 'cancel' | 'teal'
+export type ChipKind = 'wait' | 'proc' | 'supp' | 'pay' | 'ok' | 'late' | 'cancel' | 'teal' | 'rose'
 
 export function Chip({
   kind,

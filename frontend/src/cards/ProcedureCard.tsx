@@ -8,6 +8,7 @@ import {
   type PositionTableColumn,
 } from '../components/PositionTable'
 import { Modal } from '../components/Modal'
+import { StatusSelect } from '../components/StatusSelect'
 import { useAuth } from '../auth/AuthContext'
 import {
   addProcedurePositions,
@@ -28,7 +29,7 @@ import {
 } from '../api/procedures'
 import { getRequest, type ProcedureOut } from '../api/requests'
 import { listDict, type DictValue } from '../api/dict'
-import { procStatusChip, STATUS_KIND_COLOR } from '../pages/Zakupka'
+import { procStatusChip } from '../lib/statusColors'
 import { dateRu, money } from '../lib/format'
 import { canEdit } from '../lib/permissions'
 import { kopecksToRublesInput, rublesToKopecks } from '../lib/money'
@@ -853,35 +854,12 @@ function HeaderEditPanel({
         </div>
         <div style={headerFieldStyle}>
           <label style={headerLabelStyle}>Статус закупки</label>
-          <select
-            style={{
-              ...headerInputStyle,
-              fontWeight: 600,
-              ...STATUS_KIND_COLOR[procStatusChip(draft.status_zakup || '').kind],
-            }}
-            value={
-              (statusOptions ?? []).some(
-                (o) => o.value === draft.status_zakup,
-              )
-                ? draft.status_zakup
-                : ''
-            }
-            onChange={(e) => onChange('status_zakup', e.target.value)}
+          <StatusSelect
+            value={draft.status_zakup}
+            options={(statusOptions ?? []).map((o) => o.value)}
+            onSelect={(v) => onChange('status_zakup', v)}
             disabled={disabled}
-          >
-            {(statusOptions ?? []).map((o) => (
-              <option key={o.id} value={o.value}>
-                {o.value}
-              </option>
-            ))}
-          </select>
-          {!(statusOptions ?? []).some(
-            (o) => o.value === draft.status_zakup,
-          ) && (
-            <span style={{ fontSize: 10, color: 'var(--late)' }}>
-              Текущий: {draft.status_zakup || '—'} (только для чтения)
-            </span>
-          )}
+          />
         </div>
       </div>
     </div>

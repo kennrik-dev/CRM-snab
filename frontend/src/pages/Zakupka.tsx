@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Chip, type ChipKind } from '../components/Chip'
+import { Chip } from '../components/Chip'
 import { DataTable, type DataTableColumn } from '../components/DataTable'
 import { EmptyState } from '../components/EmptyState'
 import { FilterBar } from '../components/FilterBar'
+import { StatusSelect } from '../components/StatusSelect'
 import {
   listProcurements,
   patchProcedure,
@@ -14,6 +15,7 @@ import {
 import { listDict } from '../api/dict'
 import { useAuth } from '../auth/AuthContext'
 import { canEdit } from '../lib/permissions'
+import { procStatusChip } from '../lib/statusColors'
 import { dateRu } from '../lib/format'
 import { pluralRequests } from '../lib/plural'
 
@@ -43,45 +45,8 @@ function useDebounced<T>(value: T, delay: number): T {
   return v
 }
 
-// ---- Status → chip mapping (pure, unit-tested) ----------------------------
-
-// Each status_zakup value gets its OWN color (like Комплектация's colored
-// chips), so the 6 справочник values + «Новая» + «Отменена» are visually
-// distinct at a glance. Hues reuse the stage palette where they fit, plus a
-// dedicated «teal» for «Согласование» (the stage palette only has 6 hues).
-const STATUS_KIND: Record<string, ChipKind> = {
-  'Приём заявок': 'proc',
-  'Торги': 'supp',
-  'Тех. экспертиза': 'pay',
-  'Дозапросы': 'late',
-  'Согласование': 'teal',
-  'На сделку': 'ok',
-}
-
-export function procStatusChip(
-  status_zakup: string | null | undefined,
-): { kind: ChipKind; label: string } {
-  if (status_zakup === 'Отменена') return { kind: 'cancel', label: 'Отменена' }
-  if (!status_zakup || status_zakup === '') return { kind: 'wait', label: 'В закупке' }
-  if (status_zakup === 'Новая') return { kind: 'wait', label: 'Новая' }
-  return { kind: STATUS_KIND[status_zakup] ?? 'proc', label: status_zakup }
-}
-
-// ChipKind → CSS color vars, so the inline row <select> (editor) matches the
-// colored chip (read-only). Exported for ProcedureCard's status select too.
-export const STATUS_KIND_COLOR: Record<
-  ChipKind,
-  { color: string; background: string }
-> = {
-  wait: { color: 'var(--wait)', background: 'var(--wait-bg)' },
-  proc: { color: 'var(--proc)', background: 'var(--proc-bg)' },
-  supp: { color: 'var(--supp)', background: 'var(--supp-bg)' },
-  pay: { color: 'var(--pay)', background: 'var(--pay-bg)' },
-  ok: { color: 'var(--ok)', background: 'var(--ok-bg)' },
-  late: { color: 'var(--late)', background: 'var(--late-bg)' },
-  teal: { color: 'var(--teal)', background: 'var(--teal-bg)' },
-  cancel: { color: 'var(--muted)', background: 'var(--wait-bg)' },
-}
+// procStatusChip (status→color mapping, pure) lives in lib/statusColors.ts and
+// is shared with ProcedureCard + StatusSelect. See lib/statusColors.test.ts.
 
 // ---- Procedure column definitions -----------------------------------------
 
@@ -184,54 +149,19 @@ function buildColumns({
       header: 'Статус',
       width: '11%',
       render: (row) => {
-        // Read-only users see the chip. Editors get an inline <select> that
-        // PATCHes status_zakup directly from the row.
+        // Read-only users see the colored chip. Editors get a colored-chip
+        // dropdown (StatusSelect) that PATCHes status_zakup directly from the
+        // row — each option rendered in its OWN color.
         if (!canEdit) {
           const { kind, label } = procStatusChip(row.status_zakup)
           return <Chip kind={kind} label={label} mini />
         }
-        const opts = statusOptions ?? []
-        const current = row.status_zakup
-        const inOpts = current != null && opts.includes(current)
-        // Color the select by the current status (matches the read-only chip).
-        const kind = procStatusChip(current).kind
         return (
-          <select
-            value={inOpts ? current : ''}
-            // Stop propagation so opening/changing the dropdown does NOT fire
-            // the row's onRowClick (which navigates to the card).
-            onMouseDown={(e) => e.stopPropagation()}
-            onClick={(e) => e.stopPropagation()}
-            onChange={(e) => {
-              const v = e.target.value
-              if (v && v !== current) onStatusChange(row.id, v)
-            }}
-            title={current ?? '—'}
-            style={{
-              width: '100%',
-              padding: '3px 8px',
-              fontSize: 11,
-              fontWeight: 600,
-              borderRadius: 5,
-              border: 'none',
-              cursor: 'pointer',
-              ...STATUS_KIND_COLOR[kind],
-            }}
-          >
-            {/* Current status not in the dict (Новая / null / Отменена): show
-                it as a disabled placeholder so the value is visible but the
-                user can only pick a real справочник value. */}
-            {!inOpts && (
-              <option value="" disabled>
-                {current ?? '—'}
-              </option>
-            )}
-            {opts.map((v) => (
-              <option key={v} value={v}>
-                {v}
-              </option>
-            ))}
-          </select>
+          <StatusSelect
+            value={row.status_zakup}
+            options={statusOptions ?? []}
+            onSelect={(v) => onStatusChange(row.id, v)}
+          />
         )
       },
     },
