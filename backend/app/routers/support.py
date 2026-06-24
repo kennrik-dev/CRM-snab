@@ -228,3 +228,31 @@ def create_delivery(
     write_audit(db, entity_kind="procedure", entity_id=proc.id,
                 user=current_user, action="delivery_create")
     return _delivery_out(db, d)
+
+
+@router.delete("/deliveries/{delivery_id}")
+def delete_delivery(
+    delivery_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_action("soprovozhdenie", "edit")),
+) -> dict:
+    d = db.get(Delivery, delivery_id)
+    if d is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="delivery not found")
+    if d.status != "transit":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                            detail="only transit deliveries can be disbanded")
+    # FK guard: an issued UPD references this delivery → forbid.
+    if db.query(UpdPayment).filter(UpdPayment.delivery_id == d.id).first() is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                            detail="cannot disband delivery with issued UPD")
+    # Return positions to awaiting, then drop the delivery.
+    (db.query(ProcedurePosition)
+        .filter(ProcedurePosition.delivery_id == d.id)
+        .update({ProcedurePosition.delivery_id: None}))
+    proc_id = d.procedure_id
+    db.delete(d)
+    db.commit()
+    write_audit(db, entity_kind="procedure", entity_id=proc_id,
+                user=current_user, action="delivery_delete")
+    return {"ok": True}

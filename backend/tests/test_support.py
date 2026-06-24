@@ -317,3 +317,40 @@ def test_create_delivery_other_procedure_position_404(client_admin):
     pid_b = _position_ids(client_admin, b)[0]
     r = client_admin.post(f"/procedures/{a}/deliveries", json={"positions": [pid_b]})
     assert r.status_code == 404
+
+
+# --- 6.2d: DELETE delivery ------------------------------------------------------
+
+def test_delete_delivery_transit_returns_positions(client_admin):
+    proc_id = _to_support(client_admin, "DEL-1", "del", [{"name": "x", "qty": 2.0}])
+    pid = _position_ids(client_admin, proc_id)[0]
+    d = client_admin.post(f"/procedures/{proc_id}/deliveries", json={"positions": [pid]}).json()
+    r = client_admin.delete(f"/deliveries/{d['id']}")
+    assert r.status_code == 200
+    assert r.json() == {"ok": True}
+    # position back to awaiting
+    pos = client_admin.get(f"/procedures/{proc_id}").json()["positions"][0]
+    assert pos["delivery_id"] is None
+    assert client_admin.get(f"/procedures/{proc_id}").json()["deliveries"] == []
+
+
+def test_delete_delivery_done_409(client_admin):
+    proc_id = _to_support(client_admin, "DEL-DONE", "done", [{"name": "x", "qty": 2.0}])
+    pid = _position_ids(client_admin, proc_id)[0]
+    d = client_admin.post(f"/procedures/{proc_id}/deliveries", json={"positions": [pid]}).json()
+    client_admin.patch(f"/deliveries/{d['id']}", json={"status": "done"})  # transit→done
+    r = client_admin.delete(f"/deliveries/{d['id']}")
+    assert r.status_code == 409
+
+
+def test_delete_delivery_with_upd_409(client_admin):
+    proc_id = _to_support(client_admin, "DEL-UPD", "upd", [{"name": "x", "qty": 2.0}])
+    pid = _position_ids(client_admin, proc_id)[0]
+    d = client_admin.post(f"/procedures/{proc_id}/deliveries", json={"positions": [pid]}).json()
+    client_admin.post(f"/deliveries/{d['id']}/upd", json={"upd": "UPD-99"})
+    r = client_admin.delete(f"/deliveries/{d['id']}")
+    assert r.status_code == 409
+
+
+def test_delete_delivery_not_found_404(client_admin):
+    assert client_admin.delete("/deliveries/99999").status_code == 404
