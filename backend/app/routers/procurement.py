@@ -17,15 +17,18 @@ from app.audit import paginate, write_audit
 from app.db import get_db
 from app.dependencies import require_password_changed
 from app.models import (
+    Delivery,
     Dict,
     ParentRequest,
     Procedure,
     ProcedurePosition,
     RequestedPosition,
     Tender,
+    UpdPayment,
     User,
 )
-from app.permissions import require_action
+from app.permissions import can, require_action
+from app.schemas.deliveries import DeliveryOut, DeliveryUpdOut
 from app.schemas.procedures import (
     PaginatedProcedures,
     ProcedureDetail,
@@ -58,14 +61,18 @@ _SORT_KEYS = {
     "pub_end",
 }
 
+_STATUS_POSTAVKI_VALUES = frozenset({
+    "Новая", "В производстве", "В поставке", "Частично поставлено",
+    "Поставлено", "Отменена",
+})
+
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 def _build_detail(db: Session, proc: Procedure) -> ProcedureDetail:
-    """Build a ProcedureDetail from a Procedure ORM instance (with positions
-    ascending by id) — fetching the tender + parent for header fields."""
+    """Build ProcedureDetail (с Б2-полями + deliveries) из Procedure."""
     tender = db.get(Tender, proc.tender_id)
     parent = db.get(ParentRequest, tender.parent_id) if tender else None
 
@@ -75,6 +82,25 @@ def _build_detail(db: Session, proc: Procedure) -> ProcedureDetail:
         .order_by(ProcedurePosition.id.asc())
         .all()
     )
+    deliveries = (
+        db.query(Delivery)
+        .filter(Delivery.procedure_id == proc.id)
+        .order_by(Delivery.n.asc())
+        .all()
+    )
+    deliv_out: list[DeliveryOut] = []
+    for d in deliveries:
+        upd = (
+            db.query(UpdPayment).filter(UpdPayment.delivery_id == d.id).first()
+        )
+        deliv_out.append(
+            DeliveryOut(
+                id=d.id, n=d.n, status=d.status, date=d.date, eta=d.eta,
+                doc_ttn=d.doc_ttn or 0, doc_m15=d.doc_m15 or 0,
+                doc_upd=d.doc_upd or 0, doc_sert=d.doc_sert or 0,
+                upd=DeliveryUpdOut(upd=upd.upd, pay_status=upd.pay_status) if upd else None,
+            )
+        )
 
     return ProcedureDetail(
         id=proc.id,
@@ -92,8 +118,17 @@ def _build_detail(db: Session, proc: Procedure) -> ProcedureDetail:
         zagruzka=parent.zagruzka if parent else "",
         block=proc.block,
         status_zakup=proc.status_zakup,
+        contract=proc.contract,
+        fio_dogovornik=proc.fio_dogovornik,
+        contract_sum=proc.contract_sum,
+        status_sdelki=proc.status_sdelki,
+        status_postavki=proc.status_postavki,
+        srok_dd=proc.srok_dd,
+        plan_date=proc.plan_date,
+        fakt_date=proc.fakt_date,
         created_at=proc.created_at,
         positions=[ProcedurePositionOut.model_validate(p) for p in positions],
+        deliveries=deliv_out,
     )
 
 
@@ -257,7 +292,7 @@ def patch_procedure(
     procedure_id: int,
     payload: ProcedurePatch,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_action("zakupka", "edit")),
+    current_user: User = Depends(require_password_changed),
 ) -> ProcedureDetail:
     proc = db.get(Procedure, procedure_id)
     if proc is None:
@@ -266,57 +301,82 @@ def patch_procedure(
             detail="procedure not found",
         )
 
+    # Решеие 5: permission + field-whitelist по текущему block процедуры.
+    block = proc.block
+    if not can(current_user, block, "edit"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="forbidden",
+        )
+
     data = payload.model_dump(exclude_unset=True)
 
-    # status_zakup validation against the dict (6 values). Service-only
-    # values ('Новая', 'Отменена') are NOT in the dict → 422.
-    if "status_zakup" in data and data["status_zakup"] is not None:
-        allowed = {
-            row.value
-            for row in db.query(Dict).filter(Dict.kind == "status_zakup").all()
-        }
-        if data["status_zakup"] not in allowed:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="invalid status_zakup",
+    if block == "zakupka":
+        # status_zakup validation against the dict (6 values).
+        if "status_zakup" in data and data["status_zakup"] is not None:
+            allowed = {
+                row.value
+                for row in db.query(Dict).filter(Dict.kind == "status_zakup").all()
+            }
+            if data["status_zakup"] not in allowed:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="invalid status_zakup",
+                )
+
+        # Unique proc (non-null) duplicate → 409.
+        if "proc" in data and data["proc"] is not None and data["proc"] != proc.proc:
+            existing = (
+                db.query(Procedure).filter(Procedure.proc == data["proc"]).first()
             )
+            if existing is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="proc already exists",
+                )
 
-    # Unique proc (non-null) duplicate → 409. Multiple NULLs allowed.
-    if "proc" in data and data["proc"] is not None and data["proc"] != proc.proc:
-        existing = (
-            db.query(Procedure).filter(Procedure.proc == data["proc"]).first()
-        )
-        if existing is not None:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="proc already exists",
+        tender = db.get(Tender, proc.tender_id)
+        # tender_num → tender.num. Unique (non-null) duplicate → 409.
+        if "tender_num" in data and data["tender_num"] is not None and data["tender_num"] != (tender.num if tender else None):
+            existing_tender = (
+                db.query(Tender).filter(Tender.num == data["tender_num"]).first()
             )
+            if existing_tender is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="tender num already exists",
+                )
 
-    # tender_num → proc.tender.num. Unique (non-null) duplicate → 409.
-    tender = db.get(Tender, proc.tender_id)
-    if "tender_num" in data and data["tender_num"] is not None and data["tender_num"] != (tender.num if tender else None):
-        existing_tender = (
-            db.query(Tender).filter(Tender.num == data["tender_num"]).first()
-        )
-        if existing_tender is not None:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="tender num already exists",
-            )
-
-    # Apply scalar fields to the procedure.
-    for field in ("proc", "supplier", "fio_zakupshchik", "mtr", "pub_start", "pub_end", "status_zakup"):
-        if field in data:
-            setattr(proc, field, data[field])
-
-    # Apply tender_num to the tender row.
-    if "tender_num" in data and tender is not None:
-        tender.num = data["tender_num"]
+        for field in ("proc", "supplier", "fio_zakupshchik", "mtr", "pub_start", "pub_end", "status_zakup"):
+            if field in data:
+                setattr(proc, field, data[field])
+        if "tender_num" in data and tender is not None:
+            tender.num = data["tender_num"]
+    else:
+        # block == "soprovozhdenie" → Б2-fields.
+        if "status_sdelki" in data and data["status_sdelki"] is not None:
+            allowed = {
+                row.value
+                for row in db.query(Dict).filter(Dict.kind == "status_sdelki").all()
+            }
+            if data["status_sdelki"] not in allowed:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="invalid status_sdelki",
+                )
+        if "status_postavki" in data and data["status_postavki"] is not None:
+            if data["status_postavki"] not in _STATUS_POSTAVKI_VALUES:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="invalid status_postavki",
+                )
+        for field in ("contract", "fio_dogovornik", "contract_sum", "status_sdelki",
+                      "status_postavki", "srok_dd", "plan_date", "fakt_date"):
+            if field in data:
+                setattr(proc, field, data[field])
 
     db.commit()
     db.refresh(proc)
-    if tender is not None:
-        db.refresh(tender)
 
     write_audit(
         db,

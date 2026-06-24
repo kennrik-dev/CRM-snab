@@ -8,6 +8,8 @@ from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.schemas.deliveries import DeliveryOut
+
 
 # ---------------------------------------------------------------------------
 # Position sub-schema
@@ -25,6 +27,7 @@ class ProcedurePositionOut(BaseModel):
     gost_tu: Optional[str] = None
     doc_code: Optional[str] = None
     price: Optional[int] = None  # INTEGER kopecks
+    delivery_id: Optional[int] = None  # NULL = «ожидает отгрузки»
 
 
 # ---------------------------------------------------------------------------
@@ -73,8 +76,18 @@ class ProcedureDetail(BaseModel):
     zagruzka: str
     block: str
     status_zakup: Optional[str] = None
+    # Б2 (Сопровождение):
+    contract: Optional[str] = None
+    fio_dogovornik: Optional[str] = None
+    contract_sum: Optional[int] = None
+    status_sdelki: Optional[str] = None
+    status_postavki: Optional[str] = None
+    srok_dd: Optional[str] = None
+    plan_date: Optional[str] = None
+    fakt_date: Optional[str] = None
     created_at: str
     positions: list[ProcedurePositionOut] = []
+    deliveries: list[DeliveryOut] = []
     # NOTE: block_entered_at intentionally OMITTED (служебное)
 
 
@@ -91,6 +104,15 @@ class ProcedurePatch(BaseModel):
     pub_start: Optional[str] = None
     pub_end: Optional[str] = None
     status_zakup: Optional[str] = None   # validated against dict (6 values)
+    # Б2 (Сопровождение):
+    contract: Optional[str] = None
+    fio_dogovornik: Optional[str] = None
+    contract_sum: Optional[int] = None
+    status_sdelki: Optional[str] = None  # validated against dict (3 values)
+    status_postavki: Optional[str] = None  # validated against 6-value enum
+    srok_dd: Optional[str] = None
+    plan_date: Optional[str] = None
+    fakt_date: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
