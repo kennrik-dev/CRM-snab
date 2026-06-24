@@ -8,10 +8,22 @@ describe('money', () => {
     expect(out).toContain('₽')
   })
 
-  it('formats 1 234 567 kopecks as 12 346 (kopecks → rubles, rounded)', () => {
+  it('formats 1234567 kopecks as 12 345,67 ₽ (kopecks → rubles, up to 2 decimals)', () => {
     const out = money(1234567)
-    // 1 234 567 kopecks = 12 345.67 ₽ → rounded to 12 346 ₽ (kopecks→rubles).
-    expect(out).toMatch(/12[\s ]346/)
+    // 1 234 567 kopecks = 12 345.67 ₽. Kopecks preserved to 2 decimals.
+    expect(out).toMatch(/12\s345,67/)
+    expect(out).toContain('₽')
+  })
+
+  it('formats whole rubles without a decimal part (150000 kop → 1 500 ₽)', () => {
+    const out = money(150000)
+    expect(out).toMatch(/1\s500/)
+    expect(out).not.toContain(',')
+  })
+
+  it('formats 150055 kopecks as 1 500,55 ₽ (kopecks shown)', () => {
+    const out = money(150055)
+    expect(out).toMatch(/1\s500,55/)
     expect(out).toContain('₽')
   })
 

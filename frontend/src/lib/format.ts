@@ -8,7 +8,8 @@
 const RUB_FORMAT = new Intl.NumberFormat('ru-RU', {
   style: 'currency',
   currency: 'RUB',
-  maximumFractionDigits: 0,
+  minimumFractionDigits: 0,
+  maximumFractionDigits: 2,
 })
 
 const NUM_FORMAT = new Intl.NumberFormat('ru-RU', {
@@ -19,11 +20,12 @@ const PLACEHOLDER = '—'
 
 export function money(kopecks: number | null | undefined): string {
   if (kopecks === null || kopecks === undefined) return PLACEHOLDER
-  // Input is integer KOPEEKS — convert to rubles before formatting. Money is
+  // Input is integer KOPEECKS — convert to rubles before formatting. Money is
   // stored as kopecks end-to-end (DB/API) and only converted to ₽ here, at
-  // render. Round to whole rubles (the project displays money without kopecks
-  // decimals). RUB_FORMAT adds the NBSP thousands separator + " ₽" suffix.
-  return RUB_FORMAT.format(Math.round(kopecks / 100))
+  // render. Show up to 2 fractional digits (kopecks) when present; whole
+  // rubles render without a decimal part (min 0). RUB_FORMAT adds the NBSP
+  // thousands separator + " ₽" suffix.
+  return RUB_FORMAT.format(kopecks / 100)
 }
 
 export function dateRu(iso: string | null | undefined): string {
