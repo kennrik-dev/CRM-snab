@@ -89,6 +89,16 @@ def _to_support(client, code, title, positions):
     r = client.post(f"/requests/{parent_id}/take-to-work")
     assert r.status_code == 200, r.text
     proc_id = r.json()["procedure_id"]
+    # Price lives on ProcedurePosition (Phase 5.2); take-to-work does not copy
+    # it from the request payload, so set it via the positions PATCH endpoint
+    # while the procedure is still in the zakupka block.
+    proc_positions = client.get(f"/procedures/{proc_id}").json()["positions"]
+    for src, proc_pos in zip(positions, proc_positions):
+        if src.get("price") is not None:
+            client.patch(
+                f"/procedures/{proc_id}/positions/{proc_pos['id']}",
+                json={"price": src["price"]},
+            )
     client.patch(f"/procedures/{proc_id}", json={"status_zakup": "На сделку"})
     r2 = client.post(f"/procedures/{proc_id}/to-support")
     assert r2.status_code == 200, r2.text
@@ -400,3 +410,51 @@ def test_patch_delivery_eta(client_admin):
 
 def test_patch_delivery_not_found_404(client_admin):
     assert client_admin.patch("/deliveries/99999", json={"eta": "2026-07-15"}).status_code == 404
+
+
+# --- 6.2f: POST upd (upsert) ----------------------------------------------------
+
+def test_issue_upd_creates_upd_payment(client_admin, db_seeded):
+    from app.models import UpdPayment
+    proc_id = _to_support(client_admin, "UPD-1", "upd create",
+                          [{"name": "x", "qty": 2.0, "price": 10000}])
+    pid = _position_ids(client_admin, proc_id)[0]
+    d = client_admin.post(f"/procedures/{proc_id}/deliveries", json={"positions": [pid]}).json()
+    r = client_admin.post(f"/deliveries/{d['id']}/upd", json={"upd": "UPD-777"})
+    assert r.status_code == 200, r.text
+    assert r.json() == {"upd": "UPD-777", "pay_status": "await"}
+    # row exists with origin=delivery, supplier/contract pulled from procedure
+    db_seeded.expire_all()
+    row = db_seeded.query(UpdPayment).filter_by(delivery_id=d["id"]).one()
+    assert row.origin == "delivery"
+    assert row.pay_status == "await"
+    assert row.amount == 20000   # 2.0 * 100.00 ₽ (delivery positions sum)
+    # detail exposes upd on the delivery
+    det = client_admin.get(f"/procedures/{proc_id}").json()
+    assert det["deliveries"][0]["upd"] == {"upd": "UPD-777", "pay_status": "await"}
+
+
+def test_issue_upd_upsert_updates_number(client_admin):
+    proc_id = _to_support(client_admin, "UPD-2", "upd upsert", [{"name": "x", "qty": 1.0}])
+    pid = _position_ids(client_admin, proc_id)[0]
+    d = client_admin.post(f"/procedures/{proc_id}/deliveries", json={"positions": [pid]}).json()
+    client_admin.post(f"/deliveries/{d['id']}/upd", json={"upd": "WRONG"})
+    r = client_admin.post(f"/deliveries/{d['id']}/upd", json={"upd": "CORRECT"})
+    assert r.status_code == 200, r.text
+    assert r.json()["upd"] == "CORRECT"
+    # still exactly one upd_payment
+    det = client_admin.get(f"/procedures/{proc_id}").json()
+    assert det["deliveries"][0]["upd"]["upd"] == "CORRECT"
+
+
+def test_issue_upd_empty_422(client_admin):
+    proc_id = _to_support(client_admin, "UPD-3", "empty upd", [{"name": "x", "qty": 1.0}])
+    pid = _position_ids(client_admin, proc_id)[0]
+    d = client_admin.post(f"/procedures/{proc_id}/deliveries", json={"positions": [pid]}).json()
+    r = client_admin.post(f"/deliveries/{d['id']}/upd", json={"upd": ""})
+    assert r.status_code == 422
+
+
+def test_issue_upd_delivery_not_found_404(client_admin):
+    r = client_admin.post("/deliveries/99999/upd", json={"upd": "X"})
+    assert r.status_code == 404

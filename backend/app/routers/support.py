@@ -291,3 +291,52 @@ def patch_delivery(
     write_audit(db, entity_kind="procedure", entity_id=d.procedure_id,
                 user=current_user, action="delivery_update")
     return _delivery_out(db, d)
+
+
+@router.post(
+    "/deliveries/{delivery_id}/upd",
+    response_model=DeliveryUpdOut,
+    status_code=status.HTTP_200_OK,
+)
+def issue_upd(
+    delivery_id: int,
+    payload: UpdIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_action("soprovozhdenie", "edit")),
+) -> DeliveryUpdOut:
+    d = db.get(Delivery, delivery_id)
+    if d is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="delivery not found")
+    proc = db.get(Procedure, d.procedure_id)
+
+    existing = db.query(UpdPayment).filter(UpdPayment.delivery_id == d.id).first()
+    if existing is not None:
+        # Решение 4: upsert — поправить № без удаления.
+        existing.upd = payload.upd
+        db.commit()
+        db.refresh(existing)
+        write_audit(db, entity_kind="procedure", entity_id=d.procedure_id,
+                    user=current_user, action="upd_update")
+        return DeliveryUpdOut(upd=existing.upd, pay_status=existing.pay_status)
+
+    positions = (
+        db.query(ProcedurePosition)
+        .filter(ProcedurePosition.delivery_id == d.id)
+        .all()
+    )
+    amount = calc.procedure_sum(positions) or None
+    new = UpdPayment(
+        upd=payload.upd,
+        origin="delivery",
+        delivery_id=d.id,
+        pay_status="await",
+        supplier=proc.supplier if proc else None,
+        contract=proc.contract if proc else None,
+        amount=amount,
+    )
+    db.add(new)
+    db.commit()
+    db.refresh(new)
+    write_audit(db, entity_kind="procedure", entity_id=d.procedure_id,
+                user=current_user, action="upd_create")
+    return DeliveryUpdOut(upd=new.upd, pay_status=new.pay_status)
