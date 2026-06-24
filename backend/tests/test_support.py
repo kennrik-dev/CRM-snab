@@ -263,3 +263,57 @@ def test_support_list_pagination(client_admin):
     assert len(r1.json()["items"]) == 2
     r2 = client_admin.get("/support?page=2&page_size=2")
     assert len(r2.json()["items"]) == 1
+
+
+# --- 6.2c: POST deliveries ------------------------------------------------------
+
+def _position_ids(client, proc_id):
+    return [p["id"] for p in client.get(f"/procedures/{proc_id}").json()["positions"]]
+
+
+def test_create_delivery_happy(client_admin):
+    proc_id = _to_support(client_admin, "DLV-1", "delivery",
+                          [{"name": "A", "qty": 10.0}, {"name": "B", "qty": 5.0}])
+    pids = _position_ids(client_admin, proc_id)
+    r = client_admin.post(f"/procedures/{proc_id}/deliveries", json={"positions": [pids[0]]})
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert d["status"] == "transit"
+    assert d["n"] == 1
+    assert d["upd"] is None
+    # position now assigned (delivery_id set) — visible in detail
+    det = client_admin.get(f"/procedures/{proc_id}").json()
+    assert len(det["deliveries"]) == 1
+    assigned = {p["delivery_id"] for p in det["positions"]}
+    assert d["id"] in assigned
+
+
+def test_create_delivery_empty_422(client_admin):
+    proc_id = _to_support(client_admin, "DLV-EMPTY", "empty", [{"name": "x", "qty": 1.0}])
+    r = client_admin.post(f"/procedures/{proc_id}/deliveries", json={"positions": []})
+    assert r.status_code == 422
+
+
+def test_create_delivery_position_already_assigned_422(client_admin):
+    proc_id = _to_support(client_admin, "DLV-DUP", "dup", [{"name": "x", "qty": 2.0}])
+    pid = _position_ids(client_admin, proc_id)[0]
+    client_admin.post(f"/procedures/{proc_id}/deliveries", json={"positions": [pid]})
+    r = client_admin.post(f"/procedures/{proc_id}/deliveries", json={"positions": [pid]})
+    assert r.status_code == 422
+
+
+def test_create_delivery_two_sequences_n(client_admin):
+    proc_id = _to_support(client_admin, "DLV-N", "seq",
+                          [{"name": "A", "qty": 1.0}, {"name": "B", "qty": 1.0}])
+    pids = _position_ids(client_admin, proc_id)
+    d1 = client_admin.post(f"/procedures/{proc_id}/deliveries", json={"positions": [pids[0]]}).json()
+    d2 = client_admin.post(f"/procedures/{proc_id}/deliveries", json={"positions": [pids[1]]}).json()
+    assert d1["n"] == 1 and d2["n"] == 2
+
+
+def test_create_delivery_other_procedure_position_404(client_admin):
+    a = _to_support(client_admin, "DLV-A", "a", [{"name": "x", "qty": 1.0}])
+    b = _to_support(client_admin, "DLV-B", "b", [{"name": "y", "qty": 1.0}])
+    pid_b = _position_ids(client_admin, b)[0]
+    r = client_admin.post(f"/procedures/{a}/deliveries", json={"positions": [pid_b]})
+    assert r.status_code == 404

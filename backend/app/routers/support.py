@@ -172,3 +172,59 @@ def list_support(
         )
 
     return PaginatedSupport(items=items_out, total=total)
+
+
+def _delivery_out(db: Session, d: Delivery) -> DeliveryOut:
+    upd = db.query(UpdPayment).filter(UpdPayment.delivery_id == d.id).first()
+    return DeliveryOut(
+        id=d.id, n=d.n, status=d.status, date=d.date, eta=d.eta,
+        doc_ttn=d.doc_ttn or 0, doc_m15=d.doc_m15 or 0,
+        doc_upd=d.doc_upd or 0, doc_sert=d.doc_sert or 0,
+        upd=DeliveryUpdOut(upd=upd.upd, pay_status=upd.pay_status) if upd else None,
+    )
+
+
+@router.post(
+    "/procedures/{procedure_id}/deliveries",
+    response_model=DeliveryOut,
+    status_code=status.HTTP_200_OK,
+)
+def create_delivery(
+    procedure_id: int,
+    payload: DeliveryCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_action("soprovozhdenie", "edit")),
+) -> DeliveryOut:
+    proc = db.get(Procedure, procedure_id)
+    if proc is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="procedure not found")
+    if proc.block != "soprovozhdenie":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="procedure is not in support block")
+
+    # Validate every position: exists, belongs to proc, still awaiting (delivery_id NULL).
+    seen: set[int] = set()
+    for pid in payload.positions:
+        pos = db.get(ProcedurePosition, pid)
+        if pos is None or pos.procedure_id != proc.id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="position not found")
+        if pos.delivery_id is not None:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                detail="position already in a delivery")
+        if pid in seen:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                detail="duplicate position in delivery")
+        seen.add(pid)
+
+    next_n = (db.query(func.max(Delivery.n))
+              .filter(Delivery.procedure_id == proc.id).scalar() or 0) + 1
+    d = Delivery(procedure_id=proc.id, n=next_n, status="transit")
+    db.add(d)
+    db.flush()  # assign d.id
+    for pid in payload.positions:
+        db.get(ProcedurePosition, pid).delivery_id = d.id
+
+    db.commit()
+    db.refresh(d)
+    write_audit(db, entity_kind="procedure", entity_id=proc.id,
+                user=current_user, action="delivery_create")
+    return _delivery_out(db, d)
