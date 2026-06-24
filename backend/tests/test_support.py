@@ -208,3 +208,58 @@ def test_rbac_patch_support_ok_for_soprov_emp(client_seeded, db_seeded, client_a
     r = client_seeded.patch(f"/procedures/{proc_id}", json={"contract": "ДК-1"})
     assert r.status_code == 200, r.text
     assert r.json()["contract"] == "ДК-1"
+
+
+# --- 6.2b: GET /support list ----------------------------------------------------
+
+def test_support_list_empty(client_admin):
+    r = client_admin.get("/support")
+    assert r.status_code == 200
+    assert r.json() == {"items": [], "total": 0}
+
+
+def test_support_list_shows_support_procedure_with_derived(client_admin):
+    proc_id = _to_support(client_admin, "SUP-L1", "list one",
+                          [{"name": "x", "qty": 10.0}])
+    # set srok_dd in the past + not delivered → is_overdue True, overdue_pct by deliveries
+    client_admin.patch(f"/procedures/{proc_id}", json={"srok_dd": "2026-06-01"})
+    r = client_admin.get("/support")
+    body = r.json()
+    assert body["total"] == 1
+    item = body["items"][0]
+    assert item["id"] == proc_id
+    assert item["code"] == "SUP-L1"
+    assert item["status_postavki"] == "Новая"
+    assert item["is_overdue"] is True          # srok passed, not Поставлено
+    assert item["overdue_pct"] == 0.0          # no deliveries → 0
+    assert item["docs"] == {"ttn": False, "m15": False, "upd": False, "sert": False}
+    assert item["progress_delivered"] == 0
+    assert item["progress_total"] == 1
+
+
+def test_support_list_excludes_zakupka_block(client_admin, db_seeded):
+    from app.models import ParentRequest, Tender, Procedure
+    pr = ParentRequest(code="ZK-ONLY", title="zk", sostavitel="X", status="awaiting")
+    db_seeded.add(pr); db_seeded.commit(); db_seeded.refresh(pr)
+    t = Tender(parent_id=pr.id); db_seeded.add(t); db_seeded.commit(); db_seeded.refresh(t)
+    db_seeded.add(Procedure(tender_id=t.id, block="zakupka")); db_seeded.commit()
+    r = client_admin.get("/support")
+    assert r.json()["total"] == 0
+
+
+def test_support_list_cancelled_hidden_by_default(client_admin):
+    proc_id = _to_support(client_admin, "SUP-CXL", "cancel",
+                          [{"name": "x", "qty": 1.0}])
+    client_admin.patch(f"/procedures/{proc_id}", json={"status_postavki": "Отменена"})
+    assert proc_id not in {it["id"] for it in client_admin.get("/support").json()["items"]}
+    assert proc_id in {it["id"] for it in client_admin.get("/support?include_archived=1").json()["items"]}
+
+
+def test_support_list_pagination(client_admin):
+    for i in range(3):
+        _to_support(client_admin, f"SUP-PG{i}", f"pg{i}", [{"name": "x", "qty": 1.0}])
+    r1 = client_admin.get("/support?page=1&page_size=2")
+    assert r1.json()["total"] == 3
+    assert len(r1.json()["items"]) == 2
+    r2 = client_admin.get("/support?page=2&page_size=2")
+    assert len(r2.json()["items"]) == 1
