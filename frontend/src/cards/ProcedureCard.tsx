@@ -205,6 +205,13 @@ export function ProcedureCard() {
     // (pitfall #2). Awaiting guarantees the re-seed reads fresh data.
     await qc.refetchQueries({ queryKey: ['procedure', procedureId] })
     qc.invalidateQueries({ queryKey: ['procurements'] })
+    // The sister-switcher reads the parent request's procedures. A split adds a
+    // new sister procedure to the tender, so invalidate the parent-request
+    // query too — otherwise the new sister chip stays missing until a full
+    // reload. Fire-and-forget (the chip appears when the refetch lands).
+    if (proc?.parent_id) {
+      qc.invalidateQueries({ queryKey: ['request', proc.parent_id] })
+    }
     setHeaderDraft(null)
     setEditRows(null)
   }
@@ -341,7 +348,15 @@ export function ProcedureCard() {
         width: '120px',
         align: 'right',
         mono: true,
-        format: (v) => (v ? money(Math.round(Number(v) * 100)) : '—'),
+        // editRows.price is a RUBLES string the user may type with a comma
+        // decimal (ru-RU). Normalize ',' -> '.' before parsing, and fall back
+        // to '—' for non-finite input so a malformed entry never renders
+        // "NaN ₽". Save still validates via rublesToKopecks.
+        format: (v) => {
+          if (!v) return '—'
+          const k = Math.round(Number(String(v).replace(',', '.')) * 100)
+          return Number.isFinite(k) ? money(k) : '—'
+        },
       },
     ],
     [],
