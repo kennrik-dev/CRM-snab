@@ -142,6 +142,9 @@ export function ProcedureCard() {
   })
 
   const proc = query.data
+  // status_zakup as the server holds it ('' until the procedure loads). Drives
+  // the draft re-sync effect below.
+  const serverStatusZakup = proc?.status_zakup ?? ''
 
   // Status dictionary for the header <select> (6 purchasable values).
   const statusDict = useQuery({
@@ -190,6 +193,25 @@ export function ProcedureCard() {
     setEditRows(null)
     setActionErr(null)
   }, [procedureId])
+
+  // Re-sync the header draft's status to the SERVER value whenever it moves.
+  // status_zakup is the only header field edited out-of-band: changing it from
+  // a В закупке list row PATCHes the server and invalidates ['procurements'],
+  // but NOT this card's ['procedure', id]. On client-side re-entry the stale
+  // cached procedure seeds headerDraft.status_zakup (→ the header StatusSelect),
+  // then a background refetch updates proc.status_zakup (→ the crumbs chip).
+  // Without this re-sync the two status displays diverge (the reported "double
+  // status"). Only status_zakup is changed outside the card, so only it is kept
+  // in step; the other header fields stay user-edit-staged. Fires only when the
+  // status string actually changes, so an unsaved in-card status edit is not
+  // clobbered by a mere refetch that returns the same server value.
+  useEffect(() => {
+    setHeaderDraft((prev) =>
+      prev && prev.status_zakup !== serverStatusZakup
+        ? { ...prev, status_zakup: serverStatusZakup }
+        : prev,
+    )
+  }, [serverStatusZakup])
 
   // Can the user edit THIS procedure? Editable only in the zakupka block and
   // only when NOT cancelled. (`editable` gates the permission; this gate also
