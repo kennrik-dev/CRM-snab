@@ -65,6 +65,7 @@ type EditableRow = {
   gost_tu: string | null
   doc_code: string | null
   price: string | null // rubles string (kopecks↔rubles via money.ts)
+  _num?: string // display-only 1-based ordinal for the «№» column (not persisted)
 }
 
 function makeLocalRow(): EditableRow {
@@ -170,16 +171,24 @@ export function ProcedureCard() {
   const [actionErr, setActionErr] = useState<string | null>(null)
   const [savedTick, setSavedTick] = useState(0)
   const [splitOpen, setSplitOpen] = useState(false)
-  // Pending flags for the plain-async save handlers (not useMutations) so their
-  // buttons can be disabled during the request, preventing double-submit.
-  const [savingHdr, setSavingHdr] = useState(false)
-  const [savingPos, setSavingPos] = useState(false)
+  // Pending flag for the unified save (header + positions together) — disables
+  // the save button during the request, preventing double-submit.
+  const [saving, setSaving] = useState(false)
 
   useEffect(() => {
     if (savedTick === 0) return
     const t = window.setTimeout(() => setSavedTick(0), 2500)
     return () => window.clearTimeout(t)
   }, [savedTick])
+
+  // When the route param changes (sister-switcher navigation), reset the local
+  // drafts so they re-seed from the NEW procedure. Without this the card keeps
+  // the PREVIOUS procedure's positions + header after switching sisters.
+  useEffect(() => {
+    setHeaderDraft(null)
+    setEditRows(null)
+    setActionErr(null)
+  }, [procedureId])
 
   // Can the user edit THIS procedure? Editable only in the zakupka block and
   // only when NOT cancelled. (`editable` gates the permission; this gate also
@@ -249,14 +258,13 @@ export function ProcedureCard() {
     onError: (err) => setActionErr(lastErrorMessage(err)),
   })
 
-  // ---- Header editing -----------------------------------------------------
+  // ---- Header diff (used by the unified saveAll) -------------------------
 
-  async function saveHeader() {
-    if (!proc || !headerDraft) return
-    if (savingHdr) return
-    setActionErr(null)
+  // Build a ProcedurePatch of only the header fields that changed vs the
+  // server. Empty object = nothing to save.
+  function buildHeaderPatch(draft: HeaderDraft): ProcedurePatch {
+    if (!proc) return {}
     const patch: ProcedurePatch = {}
-    const draft = headerDraft
     if (draft.tender_num !== (proc.tender_num ?? ''))
       patch.tender_num = draft.tender_num.trim() || null
     if (draft.proc !== (proc.proc ?? ''))
@@ -271,17 +279,7 @@ export function ProcedureCard() {
       patch.pub_end = draft.pub_end.trim() || null
     if (draft.status_zakup !== (proc.status_zakup ?? ''))
       patch.status_zakup = draft.status_zakup.trim() || null
-    if (Object.keys(patch).length === 0) return
-    setSavingHdr(true)
-    try {
-      await patchProcedure(procedureId, patch)
-      await refresh()
-      setSavedTick((t) => t + 1)
-    } catch (err) {
-      setActionErr(lastErrorMessage(err))
-    } finally {
-      setSavingHdr(false)
-    }
+    return patch
   }
 
   // ---- Position editing ---------------------------------------------------
@@ -337,6 +335,10 @@ export function ProcedureCard() {
 
   const positionColumns = useMemo<PositionTableColumn<EditableRow>[]>(
     () => [
+      // Display-only 1-based ordinal (the «№» column, like Комплектация).
+      // ProcedurePosition has no persisted num, so this is computed from the
+      // row index (see `tableRows`) and is read-only.
+      { key: '_num', header: '№', width: '44px', align: 'center', mono: true, readOnly: true },
       { key: 'name', header: 'Наименование', width: 'minmax(180px, 1fr)' },
       { key: 'qty', header: 'Кол-во', width: '90px', align: 'right', mono: true },
       { key: 'unit', header: 'Ед. изм.', width: '80px', mono: true },
@@ -362,63 +364,78 @@ export function ProcedureCard() {
     [],
   )
 
-  async function savePositions() {
-    if (!editRows) return
-    if (savingPos) return
+  // Unified save: persists BOTH header changes and position changes in one
+  // action. There is a single «Сохранить изменения» button (actbar) so editing
+  // the header then saving positions (or vice versa) never silently drops the
+  // other section's unsaved edits — the prior two-button design did (e.g. ФИО
+  // закупщика vanished when the positions save reset the header draft).
+  async function saveAll() {
+    if (!proc) return
+    if (saving) return
     setActionErr(null)
-    setSavingPos(true)
+    setSaving(true)
     try {
-      const original = proc?.positions ?? []
-      // 1. Patch each existing row that changed.
-      for (const row of editRows) {
-        if (row.id === undefined) continue
-        const prev = original.find((p) => p.id === row.id)
-        if (!prev) continue
-        const patch: ProcedurePositionPatch = {}
-        if ((row.name ?? '') !== prev.name) patch.name = row.name ?? ''
-        // Guard against non-numeric qty: a malformed string like 'abc' would
-        // otherwise coerce to NaN -> JSON null -> backend nulls the column
-        // (silent data corruption). Only patch qty when it is a finite number.
-        const rowQty = Number(row.qty)
-        if (Number.isFinite(rowQty) && rowQty !== Number(prev.qty))
-          patch.qty = rowQty
-        if ((row.unit ?? null) !== (prev.unit ?? null)) patch.unit = row.unit ?? null
-        if ((row.gost_tu ?? null) !== (prev.gost_tu ?? null)) patch.gost_tu = row.gost_tu ?? null
-        if ((row.doc_code ?? null) !== (prev.doc_code ?? null)) patch.doc_code = row.doc_code ?? null
-        const prevPriceKop = rublesToKopecks(kopecksToRublesInput(prev.price))
-        const rowPriceKop = rublesToKopecks(row.price)
-        if (rowPriceKop !== prevPriceKop) patch.price = rowPriceKop
+      // 1. Header (only if a field changed).
+      if (headerDraft) {
+        const patch = buildHeaderPatch(headerDraft)
         if (Object.keys(patch).length > 0) {
-          await patchProcedurePosition(procedureId, row.id, patch)
+          await patchProcedure(procedureId, patch)
         }
       }
-      // 2. Mass-insert new (id-less) rows that have name+qty.
-      const newRows: ProcedurePositionInput[] = editRows
-        .filter(
-          (r) =>
-            r.id === undefined &&
-            (r.name ?? '').trim() !== '' &&
-            r.qty != null &&
-            (r.qty ?? '').trim() !== '',
+      // 2. Positions (only if editable rows exist).
+      if (editRows) {
+        const original = proc.positions
+        // 2a. Patch each existing row that changed.
+        for (const row of editRows) {
+          if (row.id === undefined) continue
+          const prev = original.find((p) => p.id === row.id)
+          if (!prev) continue
+          const patch: ProcedurePositionPatch = {}
+          if ((row.name ?? '') !== prev.name) patch.name = row.name ?? ''
+          // Guard against non-numeric qty: a malformed string like 'abc' would
+          // otherwise coerce to NaN -> JSON null -> backend nulls the column
+          // (silent data corruption). Only patch qty when it is finite.
+          const rowQty = Number(row.qty)
+          if (Number.isFinite(rowQty) && rowQty !== Number(prev.qty))
+            patch.qty = rowQty
+          if ((row.unit ?? null) !== (prev.unit ?? null)) patch.unit = row.unit ?? null
+          if ((row.gost_tu ?? null) !== (prev.gost_tu ?? null)) patch.gost_tu = row.gost_tu ?? null
+          if ((row.doc_code ?? null) !== (prev.doc_code ?? null)) patch.doc_code = row.doc_code ?? null
+          const prevPriceKop = rublesToKopecks(kopecksToRublesInput(prev.price))
+          const rowPriceKop = rublesToKopecks(row.price)
+          if (rowPriceKop !== prevPriceKop) patch.price = rowPriceKop
+          if (Object.keys(patch).length > 0) {
+            await patchProcedurePosition(procedureId, row.id, patch)
+          }
+        }
+        // 2b. Mass-insert new (id-less) rows that have name+qty.
+        const newRows: ProcedurePositionInput[] = editRows
+          .filter(
+            (r) =>
+              r.id === undefined &&
+              (r.name ?? '').trim() !== '' &&
+              r.qty != null &&
+              (r.qty ?? '').trim() !== '',
+          )
+          .map((r) => ({
+            name: (r.name ?? '').trim(),
+            qty: Number(r.qty),
+            unit: r.unit ?? null,
+            gost_tu: r.gost_tu ?? null,
+            doc_code: r.doc_code ?? null,
+            price: rublesToKopecks(r.price),
+          }))
+        if (newRows.length > 0) {
+          await addProcedurePositions(procedureId, newRows)
+        }
+        // 2c. Delete positions removed by the user — diff editRows vs original.
+        const currentIds = new Set(
+          editRows.filter((r) => r.id !== undefined).map((r) => r.id as number),
         )
-        .map((r) => ({
-          name: (r.name ?? '').trim(),
-          qty: Number(r.qty),
-          unit: r.unit ?? null,
-          gost_tu: r.gost_tu ?? null,
-          doc_code: r.doc_code ?? null,
-          price: rublesToKopecks(r.price),
-        }))
-      if (newRows.length > 0) {
-        await addProcedurePositions(procedureId, newRows)
-      }
-      // 3. Delete positions removed by the user — diff editRows vs original.
-      const currentIds = new Set(
-        editRows.filter((r) => r.id !== undefined).map((r) => r.id as number),
-      )
-      for (const p of original) {
-        if (!currentIds.has(p.id)) {
-          await deleteProcedurePosition(procedureId, p.id)
+        for (const p of original) {
+          if (!currentIds.has(p.id)) {
+            await deleteProcedurePosition(procedureId, p.id)
+          }
         }
       }
       await refresh()
@@ -426,7 +443,7 @@ export function ProcedureCard() {
     } catch (err) {
       setActionErr(lastErrorMessage(err))
     } finally {
-      setSavingPos(false)
+      setSaving(false)
     }
   }
 
@@ -444,6 +461,14 @@ export function ProcedureCard() {
       )
     }
     return proc ? sumPositionsKopecks(proc.positions) : 0
+  }, [editRows, proc])
+
+  // Rows handed to PositionTable, with a 1-based «№» ordinal attached. Derived
+  // from editRows (when editing) or the server positions; recomputed on every
+  // edit so the numbering stays in sync after add / delete / reorder.
+  const tableRows = useMemo<EditableRow[]>(() => {
+    const base = editRows ?? (proc ? proc.positions.map(toEditable) : [])
+    return base.map((r, i) => ({ ...r, _num: String(i + 1) }))
   }, [editRows, proc])
 
   // ---- Early returns (mirror RequestCard states) -------------------------
@@ -535,8 +560,7 @@ export function ProcedureCard() {
                       prev ? { ...prev, [key]: value } : prev,
                     )
                   }
-                  onSave={saveHeader}
-                  disabled={savingHdr}
+                  disabled={saving}
                 />
               ) : (
                 <>
@@ -585,10 +609,10 @@ export function ProcedureCard() {
               </button>
               <button
                 className="btn primary"
-                onClick={savePositions}
-                disabled={savingPos}
+                onClick={saveAll}
+                disabled={saving}
               >
-                {savingPos ? 'Сохранение…' : 'Сохранить изменения'}
+                {saving ? 'Сохранение…' : 'Сохранить изменения'}
               </button>
             </>
           )}
@@ -662,7 +686,7 @@ export function ProcedureCard() {
             Позиции процедуры
           </div>
           <PositionTable<EditableRow>
-            rows={editRows ?? proc.positions.map(toEditable)}
+            rows={tableRows}
             columns={positionColumns}
             getRowId={(r) => r._localId}
             onCellChange={onCellChange}
@@ -753,13 +777,11 @@ function HeaderEditPanel({
   draft,
   statusOptions,
   onChange,
-  onSave,
   disabled,
 }: {
   draft: HeaderDraft
   statusOptions: DictValue[] | null
   onChange: (key: keyof HeaderDraft, value: string) => void
-  onSave: () => void
   disabled: boolean
 }) {
   return (
@@ -857,11 +879,6 @@ function HeaderEditPanel({
             </span>
           )}
         </div>
-      </div>
-      <div style={{ marginTop: 10 }}>
-        <button className="btn primary" onClick={onSave} disabled={disabled}>
-          Сохранить изменения
-        </button>
       </div>
     </div>
   )

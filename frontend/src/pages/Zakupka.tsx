@@ -1,15 +1,17 @@
-import { useEffect, useMemo, useState, type CSSProperties } from 'react'
+import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Chip, type ChipKind } from '../components/Chip'
 import { DataTable, type DataTableColumn } from '../components/DataTable'
 import { EmptyState } from '../components/EmptyState'
 import { FilterBar } from '../components/FilterBar'
 import {
   listProcurements,
+  patchProcedure,
   type ProcedureListItem,
   type ProcedureSort,
 } from '../api/procedures'
+import { listDict } from '../api/dict'
 import { useAuth } from '../auth/AuthContext'
 import { canEdit } from '../lib/permissions'
 import { dateRu } from '../lib/format'
@@ -62,11 +64,20 @@ export function procStatusChip(
 // pre-number rows before handing them to the table.
 type NumberedProc = ProcedureListItem & { _idx: number }
 
-function buildColumns(): DataTableColumn<NumberedProc>[] {
+function buildColumns({
+  statusOptions,
+  onStatusChange,
+  canEdit,
+}: {
+  statusOptions: string[] | null
+  onStatusChange: (id: number, status: string) => void
+  canEdit: boolean
+}): DataTableColumn<NumberedProc>[] {
   // Widths sum to EXACTLY 100% so the table fills `.tbl-scroll` and every
   // column keeps a STATIC width (table-layout: fixed + colgroup), mirroring
   // Komplektaciya.tsx. The wide «Наименование» column absorbs wrapping.
-  // 3+20+8+7+8+14+9+9+9+5+8 = 100.
+  // Status widened to 11% for the inline status <select>.
+  // 3+17+8+7+8+14+9+9+9+5+11 = 100.
   return [
     {
       key: '_idx',
@@ -78,7 +89,7 @@ function buildColumns(): DataTableColumn<NumberedProc>[] {
     {
       key: 'codeTitle',
       header: 'Наименование',
-      width: '20%',
+      width: '17%',
       render: (row) => (
         <>
           <span className="parent-tag">{row.code}</span>
@@ -145,10 +156,53 @@ function buildColumns(): DataTableColumn<NumberedProc>[] {
     {
       key: 'status_zakup',
       header: 'Статус',
-      width: '8%',
+      width: '11%',
       render: (row) => {
-        const { kind, label } = procStatusChip(row.status_zakup)
-        return <Chip kind={kind} label={label} mini />
+        // Read-only users see the chip. Editors get an inline <select> that
+        // PATCHes status_zakup directly from the row.
+        if (!canEdit) {
+          const { kind, label } = procStatusChip(row.status_zakup)
+          return <Chip kind={kind} label={label} mini />
+        }
+        const opts = statusOptions ?? []
+        const current = row.status_zakup
+        const inOpts = current != null && opts.includes(current)
+        return (
+          <select
+            value={inOpts ? current : ''}
+            // Stop propagation so opening/changing the dropdown does NOT fire
+            // the row's onRowClick (which navigates to the card).
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={(e) => e.stopPropagation()}
+            onChange={(e) => {
+              const v = e.target.value
+              if (v && v !== current) onStatusChange(row.id, v)
+            }}
+            title={current ?? '—'}
+            style={{
+              width: '100%',
+              padding: '3px 4px',
+              fontSize: 12,
+              borderRadius: 3,
+              border: '1px solid var(--line)',
+              background: 'var(--surface)',
+            }}
+          >
+            {/* Current status not in the dict (Новая / null / Отменена): show
+                it as a disabled placeholder so the value is visible but the
+                user can only pick a real справочник value. */}
+            {!inOpts && (
+              <option value="" disabled>
+                {current ?? '—'}
+              </option>
+            )}
+            {opts.map((v) => (
+              <option key={v} value={v}>
+                {v}
+              </option>
+            ))}
+          </select>
+        )
       },
     },
   ]
@@ -160,6 +214,26 @@ export function Zakupka() {
   const navigate = useNavigate()
   const { permissions } = useAuth()
   const canEditZakup = canEdit(permissions, 'zakupka')
+  const qc = useQueryClient()
+
+  // Status dictionary for the inline row <select> (6 purchasable values).
+  const statusDict = useQuery({
+    queryKey: ['dict', 'status_zakup'],
+    queryFn: () => listDict('status_zakup'),
+  })
+
+  // Change status_zakup directly from a list row. Optimistic-enough: the list
+  // refetches on success, so the select (controlled by row.status_zakup) updates.
+  const statusMut = useMutation({
+    mutationFn: (vars: { id: number; status: string }) =>
+      patchProcedure(vars.id, { status_zakup: vars.status }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['procurements'] }),
+    onError: (err) => console.error('status patch failed', err),
+  })
+  const onStatusChange = useCallback(
+    (id: number, status: string) => statusMut.mutate({ id, status }),
+    [statusMut],
+  )
 
   const [searchInput, setSearchInput] = useState('')
   const [nonSearch, setNonSearch] = useState<SortAndArchive>(DEFAULT_NON_SEARCH)
@@ -183,7 +257,15 @@ export function Zakupka() {
 
   const items = useMemo(() => query.data?.items ?? [], [query.data])
   const total = query.data?.total ?? 0
-  const columns = useMemo(() => buildColumns(), [])
+  const columns = useMemo(
+    () =>
+      buildColumns({
+        statusOptions: statusDict.data?.map((d) => d.value) ?? null,
+        onStatusChange,
+        canEdit: canEditZakup,
+      }),
+    [statusDict.data, onStatusChange, canEditZakup],
+  )
 
   const numbered: NumberedProc[] = useMemo(
     () => items.map((r, i) => ({ ...r, _idx: i })),
