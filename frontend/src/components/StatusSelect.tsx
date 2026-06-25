@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { procStatusChip } from '../lib/statusColors'
+import type { ChipKind } from './Chip'
 
 /**
  * StatusSelect — a colored status CHIP that opens a popover of colored chips,
@@ -23,11 +24,13 @@ export function StatusSelect({
   options,
   onSelect,
   disabled = false,
+  color = procStatusChip,
 }: {
   value: string | null | undefined
   options: string[]
   onSelect: (status: string) => void
   disabled?: boolean
+  color?: (v: string | null | undefined) => { kind: ChipKind; label: string }
 }) {
   const [open, setOpen] = useState(false)
   const [coords, setCoords] = useState<{ top: number; left: number } | null>(null)
@@ -69,7 +72,7 @@ export function StatusSelect({
     }
   }, [open])
 
-  const cur = procStatusChip(value)
+  const cur = color(value)
 
   return (
     <>
@@ -118,7 +121,7 @@ export function StatusSelect({
             }}
           >
             {options.map((v) => {
-              const k = procStatusChip(v).kind
+              const k = color(v).kind
               return (
                 <button
                   key={v}

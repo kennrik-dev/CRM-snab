@@ -30,3 +30,54 @@ export function procStatusChip(
   if (status_zakup === 'Новая') return { kind: 'wait', label: 'Новая' }
   return { kind: STATUS_KIND[status_zakup] ?? 'proc', label: status_zakup }
 }
+
+/**
+ * status_sdelki → { chip kind, label }. Pure; unit-tested.
+ * Значения — из dict kind 'status_sdelki' (3 значения). RED не используется.
+ * - NULL / "" → wait (gray), «Не задано».
+ * - Подписано → ok; Подготовка ДД → teal; Согласование → wait.
+ * - иное → proc fallback.
+ */
+export function sdelkiStatusChip(
+  v: string | null | undefined,
+): { kind: ChipKind; label: string } {
+  if (!v || v === '') return { kind: 'wait', label: 'Не задано' }
+  switch (v) {
+    case 'Подписано':
+      return { kind: 'ok', label: v }
+    case 'Подготовка ДД':
+      return { kind: 'teal', label: v }
+    case 'Согласование':
+      return { kind: 'wait', label: v }
+    default:
+      return { kind: 'proc', label: v }
+  }
+}
+
+/**
+ * status_postavki → { chip kind, label }. Pure; unit-tested.
+ * 6-значный enum. RED (late) — только «Отменена» (консистентно с status_zakup).
+ * - NULL / "" → wait (gray), «Не задано».
+ * - иное → proc fallback.
+ */
+export function postavkiStatusChip(
+  v: string | null | undefined,
+): { kind: ChipKind; label: string } {
+  if (!v || v === '') return { kind: 'wait', label: 'Не задано' }
+  switch (v) {
+    case 'Отменена':
+      return { kind: 'late', label: v }
+    case 'Поставлено':
+      return { kind: 'ok', label: v }
+    case 'Частично поставлено':
+      return { kind: 'pay', label: v }
+    case 'В поставке':
+      return { kind: 'supp', label: v }
+    case 'В производстве':
+      return { kind: 'teal', label: v }
+    case 'Новая':
+      return { kind: 'wait', label: v }
+    default:
+      return { kind: 'proc', label: v }
+  }
+}

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { procStatusChip } from './statusColors'
+import { procStatusChip, sdelkiStatusChip, postavkiStatusChip } from './statusColors'
 
 // procStatusChip: each status_zakup value gets its OWN color; RED (late) is
 // reserved for «Отменена» only.
@@ -36,5 +36,51 @@ describe('procStatusChip', () => {
 
   it('falls back to the proc chip for an unknown status', () => {
     expect(procStatusChip('Что-то новое')).toEqual({ kind: 'proc', label: 'Что-то новое' })
+  })
+})
+
+describe('sdelkiStatusChip', () => {
+  it('Подписано → ok', () => {
+    expect(sdelkiStatusChip('Подписано')).toEqual({ kind: 'ok', label: 'Подписано' })
+  })
+  it('Подготовка ДД → teal', () => {
+    expect(sdelkiStatusChip('Подготовка ДД')).toEqual({ kind: 'teal', label: 'Подготовка ДД' })
+  })
+  it('Согласование → wait', () => {
+    expect(sdelkiStatusChip('Согласование')).toEqual({ kind: 'wait', label: 'Согласование' })
+  })
+  it('null/empty → wait «Не задано»', () => {
+    expect(sdelkiStatusChip(null)).toEqual({ kind: 'wait', label: 'Не задано' })
+    expect(sdelkiStatusChip('')).toEqual({ kind: 'wait', label: 'Не задано' })
+  })
+  it('unknown → proc fallback', () => {
+    expect(sdelkiStatusChip('Чтото')).toEqual({ kind: 'proc', label: 'Чтото' })
+  })
+})
+
+describe('postavkiStatusChip', () => {
+  it('Отменена → late (red, единственный красный)', () => {
+    expect(postavkiStatusChip('Отменена')).toEqual({ kind: 'late', label: 'Отменена' })
+  })
+  it('Поставлено → ok', () => {
+    expect(postavkiStatusChip('Поставлено')).toEqual({ kind: 'ok', label: 'Поставлено' })
+  })
+  it('Частично поставлено → pay', () => {
+    expect(postavkiStatusChip('Частично поставлено')).toEqual({ kind: 'pay', label: 'Частично поставлено' })
+  })
+  it('В поставке → supp', () => {
+    expect(postavkiStatusChip('В поставке')).toEqual({ kind: 'supp', label: 'В поставке' })
+  })
+  it('В производстве → teal', () => {
+    expect(postavkiStatusChip('В производстве')).toEqual({ kind: 'teal', label: 'В производстве' })
+  })
+  it('Новая → wait', () => {
+    expect(postavkiStatusChip('Новая')).toEqual({ kind: 'wait', label: 'Новая' })
+  })
+  it('null/empty → wait «Не задано»', () => {
+    expect(postavkiStatusChip(null)).toEqual({ kind: 'wait', label: 'Не задано' })
+  })
+  it('unknown → proc fallback', () => {
+    expect(postavkiStatusChip('???')).toEqual({ kind: 'proc', label: '???' })
   })
 })
