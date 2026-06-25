@@ -10,7 +10,7 @@ import {
   upsertUpd,
   type DeliveryOut,
 } from '../../api/support'
-import { money } from '../../lib/format'
+import { money, dateRu } from '../../lib/format'
 import type { ProcedureDetail } from '../../api/procedures'
 
 const DOC_FIELDS: { field: 'doc_ttn' | 'doc_m15' | 'doc_upd' | 'doc_sert'; label: string }[] = [
@@ -103,8 +103,8 @@ export function DeliverySection({
                 <span className={`chip ${d.status === 'done' ? 'ok' : 'proc'} mini`}>
                   {d.status === 'done' ? 'Получена' : 'В пути'}
                 </span>
-                {d.date && <span style={{ color: 'var(--muted)', fontSize: 12 }}>от {d.date}</span>}
-                {d.eta && d.status === 'transit' && <span style={{ color: 'var(--muted)', fontSize: 12 }}>ETA {d.eta}</span>}
+                {d.date && <span style={{ color: 'var(--muted)', fontSize: 12 }}>от {dateRu(d.date)}</span>}
+                {d.eta && d.status === 'transit' && <span style={{ color: 'var(--muted)', fontSize: 12 }}>ETA {dateRu(d.eta)}</span>}
                 <span className="sp" style={{ flex: 1 }} />
                 {canMarkDone && <button className="btn" onClick={() => markDone(d)}>Отметить получение</button>}
                 {canDisband && <button className="btn" onClick={() => disband(d)}>Расформировать</button>}
