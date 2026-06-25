@@ -175,7 +175,7 @@ export function SupportCard() {
           {sisters.map((s) => (
             <button
               key={s.id}
-              className={`chip proc mini${s.id === proc.id ? '' : ''}`}
+              className="chip proc mini"
               style={{
                 border: 'none',
                 cursor: 'pointer',
