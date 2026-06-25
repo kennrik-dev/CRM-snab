@@ -2,6 +2,7 @@ import { NavLink } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { listRequests } from '../api/requests'
 import { listProcurements } from '../api/procedures'
+import { listSupport } from '../api/support'
 
 type TabDef = { to: string; label: string; showCounter?: boolean }
 
@@ -16,10 +17,11 @@ const TABS: TabDef[] = [
 
 // Counter queries fetch page_size=1 so the backend only sends the `total`
 // count and no payload rows.
-// Other tabs (soprovozhdenie, oplaty) are placeholders for now — they still
-// render `—` until their endpoints are wired up.
+// Other tabs (oplaty) remain placeholders — still renders `—` until its
+// endpoint is wired up.
 const KOMPL_COUNTER_KEY = ['requests', { tabCounter: true }] as const
 const ZAKUP_COUNTER_KEY = ['procurements', { tabCounter: true }] as const
+const SOPP_COUNTER_KEY = ['support', { tabCounter: true }] as const
 
 export function Tabs() {
   const kompl = useQuery({
@@ -30,8 +32,13 @@ export function Tabs() {
     queryKey: ZAKUP_COUNTER_KEY,
     queryFn: () => listProcurements({ page_size: 1 }),
   })
+  const sopp = useQuery({
+    queryKey: SOPP_COUNTER_KEY,
+    queryFn: () => listSupport({ page_size: 1 }),
+  })
   const komplTotal = kompl.data?.total
   const zakupTotal = zakup.data?.total
+  const soppTotal = sopp.data?.total
 
   return (
     <div className="tabs">
@@ -41,9 +48,11 @@ export function Tabs() {
             ? (komplTotal ?? '—')
             : t.to === '/zakupka'
               ? (zakupTotal ?? '—')
-              : t.showCounter
-                ? '—'
-                : null
+              : t.to === '/soprovozhdenie'
+                ? (soppTotal ?? '—')
+                : t.showCounter
+                  ? '—'
+                  : null
         return (
           <NavLink
             key={t.to}

@@ -8,6 +8,7 @@ import { ChangePassword } from './auth/ChangePassword'
 import { RequireAuth, RequireAuthOrChange, RequireNoAuth } from './auth/Guards'
 import { Komplektaciya } from './pages/Komplektaciya'
 import { Zakupka } from './pages/Zakupka'
+import { Soprovozhdenie } from './pages/Soprovozhdenie'
 import { RequestCard } from './cards/RequestCard'
 import { ProcedureCard } from './cards/ProcedureCard'
 
@@ -33,7 +34,7 @@ function AppShell() {
         <Route path="/komplektaciya/:id" element={<RequestCard />} />
         <Route path="/zakupka" element={<Zakupka />} />
         <Route path="/zakupka/:id" element={<ProcedureCard />} />
-        <Route path="/soprovozhdenie" element={<PlaceholderPage title="В сопровождении" />} />
+        <Route path="/soprovozhdenie" element={<Soprovozhdenie />} />
         <Route path="/oplaty" element={<PlaceholderPage title="Оплаты" />} />
         <Route path="/otchety" element={<PlaceholderPage title="Отчёты" />} />
       </Routes>
