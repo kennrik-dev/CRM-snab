@@ -14,6 +14,7 @@ import { kopecksToRublesInput, rublesToKopecks } from '../lib/money'
 import { sumPositionsKopecks, sisterRoute } from '../lib/supportView'
 import { canEdit } from '../lib/permissions'
 import { useAuth } from '../auth/AuthContext'
+import { DeliverySection } from '../components/support/DeliverySection'
 
 type SoppDraft = {
   contract: string
@@ -344,7 +345,7 @@ export function SupportCard() {
         </div>
       </div>
 
-      {/* Поставки — подключается в Task 6.3.5b (<DeliverySection/>) */}
+      <DeliverySection proc={proc} canEditThis={canEditThis} refresh={refresh} />
     </div>
   )
 }
