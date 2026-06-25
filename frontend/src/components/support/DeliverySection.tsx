@@ -21,8 +21,30 @@ const DOC_FIELDS: { field: 'doc_ttn' | 'doc_m15' | 'doc_upd' | 'doc_sert'; label
 ]
 
 function lastErrorMessage(err: unknown): string {
-  const e = err as { body?: { detail?: string } } | null
-  return e?.body?.detail ?? 'Ошибка'
+  const e = err as { body?: { detail?: unknown } } | null
+  const d = e?.body?.detail
+  if (typeof d === 'string') return d
+  if (Array.isArray(d)) {
+    // Pydantic 422: [{type, loc, msg, input}, ...] → берём msg первой ошибки.
+    const first = d[0] as { msg?: string } | undefined
+    return first?.msg ?? 'Ошибка валидации'
+  }
+  return 'Ошибка'
+}
+
+/** Сегодня (локальная дата) как ISO 'YYYY-MM-DD' — дефолт для даты получения. */
+function todayIso(): string {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+const qtyInputStyle: CSSProperties = {
+  width: 64,
+  border: '1px solid var(--line)',
+  borderRadius: 4,
+  padding: '2px 4px',
+  fontFamily: 'inherit',
+  fontSize: 12,
 }
 
 export function DeliverySection({
@@ -36,8 +58,11 @@ export function DeliverySection({
 }) {
   const [createOpen, setCreateOpen] = useState(false)
   const [selected, setSelected] = useState<Set<number>>(new Set())
+  // qty per selected position (default = full on open); presence in `selected` = included.
+  const [qty, setQty] = useState<Record<number, number>>({})
   const [err, setErr] = useState<string | null>(null)
   const [updDrafts, setUpdDrafts] = useState<Record<number, string>>({})
+  const [receiving, setReceiving] = useState<{ id: number; date: string } | null>(null)
 
   const awaiting = proc.positions.filter((p) => p.delivery_id == null)
   const deliveries = [...proc.deliveries].sort((a, b) => a.n - b.n)
@@ -55,13 +80,26 @@ export function DeliverySection({
   const createMut = () =>
     run(async () => {
       if (selected.size === 0) return
-      await createDelivery(proc.id, { positions: [...selected] })
+      // Clamp each qty to [1, full] before sending (defensive; input min/max hint too).
+      const positions = [...selected].map((pid) => {
+        const pos = awaiting.find((p) => p.id === pid)
+        const full = pos?.qty ?? 1
+        return { id: pid, qty: Math.max(1, Math.min(qty[pid] ?? full, full)) }
+      })
+      await createDelivery(proc.id, { positions })
       setCreateOpen(false)
       setSelected(new Set())
+      setQty({})
     })
   const toggleDoc = (d: DeliveryOut, field: 'doc_ttn' | 'doc_m15' | 'doc_upd' | 'doc_sert') =>
     run(() => patchDelivery(d.id, { [field]: d[field] ? 0 : 1 }))
-  const markDone = (d: DeliveryOut) => run(() => patchDelivery(d.id, { status: 'done' }))
+  const markDone = (d: DeliveryOut) => setReceiving({ id: d.id, date: todayIso() })
+  const confirmReceive = () =>
+    run(async () => {
+      if (!receiving) return
+      await patchDelivery(receiving.id, { status: 'done', date: receiving.date || null })
+      setReceiving(null)
+    })
   const disband = (d: DeliveryOut) => run(() => deleteDelivery(d.id))
   const submitUpd = (d: DeliveryOut, value: string) =>
     run(async () => {
@@ -79,7 +117,13 @@ export function DeliverySection({
           <button
             className="btn primary"
             disabled={awaiting.length === 0}
-            onClick={() => { setSelected(new Set()); setCreateOpen(true) }}
+            onClick={() => {
+              // По умолчанию все ожидающие выбраны на полное количество (можно уменьшить).
+              const aw = proc.positions.filter((p) => p.delivery_id == null)
+              setSelected(new Set(aw.map((p) => p.id)))
+              setQty(Object.fromEntries(aw.map((p) => [p.id, p.qty])))
+              setCreateOpen(true)
+            }}
             title={awaiting.length === 0 ? 'Нет позиций в ожидании' : 'Создать поставку'}
           >
             + Создать поставку
@@ -197,13 +241,48 @@ export function DeliverySection({
                         }
                       />
                     </td>
-                    <td>{p.name}</td><td>{p.qty}</td><td>{p.unit ?? '—'}</td>
+                    <td>{p.name}</td>
+                    <td>
+                      <input
+                        type="number"
+                        min={1}
+                        max={p.qty}
+                        step="any"
+                        disabled={!checked}
+                        value={qty[p.id] ?? p.qty}
+                        onChange={(e) => setQty((m) => ({ ...m, [p.id]: Number(e.target.value) }))}
+                        style={qtyInputStyle}
+                      />
+                      <span style={{ color: 'var(--faint)', fontSize: 11, marginLeft: 4 }}>/ {p.qty}</span>
+                    </td>
+                    <td>{p.unit ?? '—'}</td>
                   </tr>
                 )
               })}
             </tbody>
           </table>
         )}
+      </Modal>
+
+      <Modal
+        open={receiving !== null}
+        onClose={() => setReceiving(null)}
+        title="Отметить получение"
+        width={420}
+        footer={
+          <>
+            <button className="btn" onClick={() => setReceiving(null)}>Отмена</button>
+            <button className="btn primary" onClick={confirmReceive}>Получено</button>
+          </>
+        }
+      >
+        <label style={{ display: 'block', fontSize: 12, color: 'var(--muted)', marginBottom: 6 }}>Дата получения</label>
+        <input
+          type="date"
+          value={receiving?.date ?? ''}
+          onChange={(e) => setReceiving((r) => (r ? { ...r, date: e.target.value } : r))}
+          style={{ border: '1px solid var(--line)', borderRadius: 5, padding: '6px 8px', fontFamily: 'inherit', fontSize: 13, width: '100%' }}
+        />
       </Modal>
     </div>
   )

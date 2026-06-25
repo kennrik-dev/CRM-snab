@@ -18,6 +18,19 @@ export function progressState(
   return { pct: Math.min(100, (d / t) * 100), done: d >= t }
 }
 
+/** Цвет текста «delivered/total» в колонке «Поз.» списка сопровождения:
+ * 0 поставлено → красный (--late), частично → оранжевый (--proc), все → зелёный
+ * (--ok). total=0 (нет позиций) → серый (--faint). Логика единая для любого числа
+ * позиций (не только 3): 0/N красный, 1..N-1 из N оранжевый, N/N зелёный. */
+export function posCountColor(delivered: number, total: number): string {
+  const t = Math.max(0, Math.floor(total))
+  const d = Math.max(0, Math.floor(delivered))
+  if (t === 0) return 'var(--faint)'
+  if (d <= 0) return 'var(--late)'
+  if (d >= t) return 'var(--ok)'
+  return 'var(--proc)'
+}
+
 /** Σ qty*price (копейки); price null → 0. Для подсказки «Σ позиций» у суммы договора. */
 export function sumPositionsKopecks(
   positions: { qty: number; price: number | null }[],

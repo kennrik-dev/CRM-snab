@@ -1,7 +1,7 @@
 """Pydantic v2 schemas for deliveries + support list (Phase 6.2)."""
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -26,9 +26,16 @@ class DeliveryOut(BaseModel):
     upd: Optional[DeliveryUpdOut] = None
 
 
+class DeliveryPositionIn(BaseModel):
+    """Частичная отгрузка: id позиции + сколько отгружаем (0 < qty ≤ position.qty)."""
+    id: int
+    qty: float = Field(gt=0)
+
+
 class DeliveryCreate(BaseModel):
-    # ≥1 procedure_position_id; пустой массив → 422 (Pydantic min_length)
-    positions: list[int] = Field(min_length=1)
+    # Каждая запись: либо int (id позиции → отгрузить ВСЁ), либо {id, qty} (частично).
+    # ≥1 записи; пустой список → 422 (Pydantic min_length).
+    positions: list[Union[int, DeliveryPositionIn]] = Field(min_length=1)
 
 
 class DeliveryPatch(BaseModel):
@@ -75,6 +82,6 @@ class PaginatedSupport(BaseModel):
 
 
 __all__ = [
-    "DeliveryUpdOut", "DeliveryOut", "DeliveryCreate", "DeliveryPatch",
-    "UpdIn", "SupportListItem", "PaginatedSupport",
+    "DeliveryUpdOut", "DeliveryOut", "DeliveryCreate", "DeliveryPositionIn",
+    "DeliveryPatch", "UpdIn", "SupportListItem", "PaginatedSupport",
 ]

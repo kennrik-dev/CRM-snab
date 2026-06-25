@@ -15,10 +15,11 @@ import { EmptyState } from '../components/EmptyState'
 import { StatusSelect } from '../components/StatusSelect'
 import { Chip } from '../components/Chip'
 import { OverduePct } from '../components/support/OverduePct'
-import { Progress } from '../components/support/Progress'
+import { DateCell } from '../components/support/DateCell'
 import { DocsSquares } from '../components/support/DocsSquares'
 import { sdelkiStatusChip, postavkiStatusChip } from '../lib/statusColors'
-import { money, dateRu } from '../lib/format'
+import { posCountColor } from '../lib/supportView'
+import { money } from '../lib/format'
 import { canEdit } from '../lib/permissions'
 import { useAuth } from '../auth/AuthContext'
 
@@ -57,13 +58,14 @@ function useDebounced<T>(value: T, delay: number): T {
 
 // `_idx` carries the row's 1-based position (the `#` column). The DataTable
 // render callback receives a single row, so rows are pre-numbered before being
-// handed to the table. Widths sum to EXACTLY 100% (table-layout: fixed):
-// 3+16+6+5+8+7+8+9+9+6+6+6+5+6+6 = 100.
+// handed to the table. The table gets the `fit` class (compact: smaller chips,
+// min-width:0, no horizontal scroll). Widths sum to EXACTLY 100%:
+// 3+14+6+5+6+5+8+10+12+7+7+4+6+7 = 100. (Факт убран из списка — только в карточке)
 function buildColumns(args: {
   sdelkiOptions: string[] | null
   onSdelki: (id: number, v: string) => void
   onPostavki: (id: number, v: string) => void
-  onDate: (id: number, field: 'plan_date' | 'fakt_date', v: string) => void
+  onDate: (id: number, field: 'srok_dd' | 'plan_date' | 'fakt_date', v: string | null) => void
   canEdit: boolean
 }): DataTableColumn<Numbered>[] {
   const { sdelkiOptions, onSdelki, onPostavki, onDate, canEdit } = args
@@ -78,7 +80,7 @@ function buildColumns(args: {
     {
       key: 'title',
       header: 'Наименование',
-      width: '16%',
+      width: '14%',
       render: (r) => (
         <>
           <span className="parent-tag">{r.code}</span>
@@ -103,7 +105,7 @@ function buildColumns(args: {
     {
       key: 'supplier',
       header: 'Поставщик',
-      width: '8%',
+      width: '6%',
       render: (r) =>
         r.supplier ? (
           <span className="supp-c">{r.supplier}</span>
@@ -114,7 +116,7 @@ function buildColumns(args: {
     {
       key: 'mtr',
       header: 'Тип МТР',
-      width: '7%',
+      width: '5%',
       render: (r) => r.mtr ?? '—',
     },
     {
@@ -127,7 +129,7 @@ function buildColumns(args: {
     {
       key: 'status_sdelki',
       header: 'Статус сделки',
-      width: '9%',
+      width: '10%',
       render: (r) =>
         canEdit ? (
           <StatusSelect
@@ -143,7 +145,7 @@ function buildColumns(args: {
     {
       key: 'status_postavki',
       header: 'Статус поставки',
-      width: '9%',
+      width: '12%',
       render: (r) =>
         canEdit ? (
           <StatusSelect
@@ -159,60 +161,32 @@ function buildColumns(args: {
     {
       key: 'srok_dd',
       header: 'Срок ДД',
-      width: '6%',
-      render: (r) => <span className="dt">{dateRu(r.srok_dd)}</span>,
+      width: '7%',
+      render: (r) => (
+        <DateCell
+          value={r.srok_dd}
+          canEdit={canEdit}
+          onCommit={(v) => onDate(r.id, 'srok_dd', v)}
+        />
+      ),
     },
     {
       key: 'plan_date',
       header: 'План',
-      width: '6%',
-      render: (r) =>
-        canEdit ? (
-          <input
-            type="date"
-            value={r.plan_date ?? ''}
-            onClick={(e) => e.stopPropagation()}
-            onChange={(e) => onDate(r.id, 'plan_date', e.target.value)}
-            style={{
-              border: '1px solid var(--line)',
-              borderRadius: 4,
-              padding: '2px 4px',
-              fontFamily: 'inherit',
-              fontSize: 12,
-            }}
-          />
-        ) : (
-          <span className="dt">{dateRu(r.plan_date)}</span>
-        ),
-    },
-    {
-      key: 'fakt_date',
-      header: 'Факт',
-      width: '6%',
-      render: (r) =>
-        canEdit ? (
-          <input
-            type="date"
-            value={r.fakt_date ?? ''}
-            onClick={(e) => e.stopPropagation()}
-            onChange={(e) => onDate(r.id, 'fakt_date', e.target.value)}
-            style={{
-              border: '1px solid var(--line)',
-              borderRadius: 4,
-              padding: '2px 4px',
-              fontFamily: 'inherit',
-              fontSize: 12,
-            }}
-          />
-        ) : (
-          <span className="dt">{dateRu(r.fakt_date)}</span>
-        ),
+      width: '7%',
+      render: (r) => (
+        <DateCell
+          value={r.plan_date}
+          canEdit={canEdit}
+          onCommit={(v) => onDate(r.id, 'plan_date', v)}
+        />
+      ),
     },
     {
       key: 'overdue_pct',
       header: 'Просроч.',
       align: 'center',
-      width: '5%',
+      width: '4%',
       render: (r) => <OverduePct overduePct={r.overdue_pct} />,
     },
     {
@@ -226,10 +200,15 @@ function buildColumns(args: {
       key: 'progress',
       header: 'Поз.',
       align: 'center',
-      width: '6%',
-      render: (r) => (
-        <Progress delivered={r.progress_delivered} total={r.progress_total} />
-      ),
+      width: '7%',
+      render: (r) => {
+        const total = r.progress_total
+        return (
+          <span className="dt" style={{ color: posCountColor(r.progress_delivered, total), fontWeight: 600 }}>
+            {total > 0 ? `${r.progress_delivered}/${total}` : '—'}
+          </span>
+        )
+      },
     },
   ]
 }
@@ -285,11 +264,8 @@ export function Soprovozhdenie() {
     [patchMut],
   )
   const onDate = useCallback(
-    (id: number, field: 'plan_date' | 'fakt_date', v: string) =>
-      patchMut.mutate({
-        id,
-        patch: field === 'plan_date' ? { plan_date: v || null } : { fakt_date: v || null },
-      }),
+    (id: number, field: 'srok_dd' | 'plan_date' | 'fakt_date', v: string | null) =>
+      patchMut.mutate({ id, patch: { [field]: v || null } as ProcedurePatch }),
     [patchMut],
   )
 
@@ -383,6 +359,7 @@ export function Soprovozhdenie() {
             />
           ) : (
             <DataTable<Numbered>
+              className="fit"
               columns={columns}
               rows={numbered}
               getRowId={(r) => r.id}

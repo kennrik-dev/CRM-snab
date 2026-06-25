@@ -84,7 +84,11 @@ export type DeliveryOut = {
   upd: UpdOut
 }
 
-export type DeliveryCreate = { positions: number[] } // ≥1 (бэкенд 422 на пустой)
+export type DeliveryCreate = {
+  // ≥1; каждая запись отгружает `qty` позиции `id` (0 < qty ≤ position.qty).
+  // (Бэкенд принимает и просто int = «всё», но UI всегда шлёт {id, qty}.)
+  positions: { id: number; qty: number }[]
+}
 
 export type DeliveryPatch = {
   status?: DeliveryStatus // 'done' (transit→done one-way)

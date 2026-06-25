@@ -244,7 +244,7 @@ def test_support_list_shows_support_procedure_with_derived(client_admin):
     assert item["overdue_pct"] == 0.0          # no deliveries → 0
     assert item["docs"] == {"ttn": False, "m15": False, "upd": False, "sert": False}
     assert item["progress_delivered"] == 0
-    assert item["progress_total"] == 1
+    assert item["progress_total"] == 1   # count-based: 1 position
 
 
 def test_support_list_excludes_zakupka_block(client_admin, db_seeded):
@@ -327,6 +327,49 @@ def test_create_delivery_other_procedure_position_404(client_admin):
     pid_b = _position_ids(client_admin, b)[0]
     r = client_admin.post(f"/procedures/{a}/deliveries", json={"positions": [pid_b]})
     assert r.status_code == 404
+
+
+def test_create_delivery_partial_splits_position(client_admin):
+    proc_id = _to_support(client_admin, "DLV-PART", "partial", [{"name": "A", "qty": 5.0}])
+    pid = _position_ids(client_admin, proc_id)[0]
+    r = client_admin.post(f"/procedures/{proc_id}/deliveries",
+                          json={"positions": [{"id": pid, "qty": 2.0}]})
+    assert r.status_code == 200, r.text
+    det = client_admin.get(f"/procedures/{proc_id}").json()
+    # original (shipped part) qty=2 in the delivery; remainder qty=3 awaiting
+    positions = det["positions"]
+    assert sorted(p["qty"] for p in positions) == [2.0, 3.0]
+    shipped = [p for p in positions if p["delivery_id"] is not None]
+    assert len(shipped) == 1 and shipped[0]["qty"] == 2.0
+
+
+def test_create_delivery_partial_qty_exceeds_422(client_admin):
+    proc_id = _to_support(client_admin, "DLV-BIG", "big", [{"name": "A", "qty": 5.0}])
+    pid = _position_ids(client_admin, proc_id)[0]
+    r = client_admin.post(f"/procedures/{proc_id}/deliveries",
+                          json={"positions": [{"id": pid, "qty": 10.0}]})
+    assert r.status_code == 422
+
+
+def test_create_delivery_partial_qty_zero_422(client_admin):
+    proc_id = _to_support(client_admin, "DLV-ZERO", "zero", [{"name": "A", "qty": 5.0}])
+    pid = _position_ids(client_admin, proc_id)[0]
+    r = client_admin.post(f"/procedures/{proc_id}/deliveries",
+                          json={"positions": [{"id": pid, "qty": 0}]})
+    assert r.status_code == 422
+
+
+def test_support_progress_count_based_after_partial_split(client_admin):
+    proc_id = _to_support(client_admin, "SUP-QTY", "qty", [{"name": "A", "qty": 5.0}])
+    pid = _position_ids(client_admin, proc_id)[0]
+    # ship 2 of 5 → позиция делится: [2 в поставке] + [3 ожидает] = 2 строки
+    d = client_admin.post(f"/procedures/{proc_id}/deliveries",
+                          json={"positions": [{"id": pid, "qty": 2.0}]}).json()
+    client_admin.patch(f"/deliveries/{d['id']}", json={"status": "done"})
+    item = client_admin.get("/support").json()["items"][0]
+    # count-based: 1 позиция-строка в выполненной поставке из 2 строк (1/2)
+    assert item["progress_delivered"] == 1
+    assert item["progress_total"] == 2
 
 
 # --- 6.2d: DELETE delivery ------------------------------------------------------

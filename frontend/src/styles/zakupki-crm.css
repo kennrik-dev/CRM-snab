@@ -161,10 +161,12 @@ table.reg.fit{min-width:0;table-layout:fixed;width:100%}
 .back{display:inline-flex;align-items:center;gap:7px;font-size:12.5px;color:var(--muted);font-weight:500;margin-bottom:14px}.back:hover{color:var(--ink)}
 .dcard{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);overflow:hidden}
 .dhead{padding:18px 22px;border-bottom:1px solid var(--line)}
-.dhead .crumbs{display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap}
-.dhead .crumbs .pcode{font-family:var(--mono);font-weight:600;font-size:12px;background:var(--surface-2);border:1px solid var(--line);padding:2px 9px;border-radius:5px}
-.dhead .crumbs .sib{font-family:var(--mono);font-size:11.5px;color:var(--muted);border:1px solid var(--line);padding:2px 8px;border-radius:5px}
-.dhead .crumbs .sib.on{background:var(--ink);color:#fff;border-color:var(--ink)}.dhead .crumbs .sib:hover{border-color:var(--ink)}
+/* .crumbs / .pcode / .sib — без .dhead-префикса: переиспользуются и карточкой
+   сопровождения (SupportCard), и карточкой закупки (.dhead .crumbs). */
+.crumbs{display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap}
+.crumbs .pcode{font-family:var(--mono);font-weight:600;font-size:12px;background:var(--surface-2);border:1px solid var(--line);padding:2px 9px;border-radius:5px}
+.crumbs .sib{font-family:var(--mono);font-size:11.5px;color:var(--muted);border:1px solid var(--line);padding:2px 8px;border-radius:5px;cursor:pointer}
+.crumbs .sib.on{background:var(--ink);color:#fff;border-color:var(--ink)}.crumbs .sib:hover{border-color:var(--ink)}
 .dhead .top{display:flex;align-items:flex-start;gap:16px;flex-wrap:wrap}
 .dhead h1{font-family:var(--mono);font-size:21px;font-weight:600}
 .dhead h1 small{font-family:var(--sans);font-size:13px;color:var(--muted);font-weight:400;margin-left:8px}

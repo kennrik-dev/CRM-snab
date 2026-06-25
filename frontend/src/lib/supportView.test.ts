@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   overdueMod,
   progressState,
+  posCountColor,
   sumPositionsKopecks,
   sisterRoute,
 } from './supportView'
@@ -33,6 +34,26 @@ describe('progressState', () => {
   })
   it('all delivered → 100%, done', () => {
     expect(progressState(2, 2)).toEqual({ pct: 100, done: true })
+  })
+})
+
+describe('posCountColor', () => {
+  it('none delivered → red (--late)', () => {
+    expect(posCountColor(0, 3)).toBe('var(--late)')
+  })
+  it('partial → orange (--proc)', () => {
+    expect(posCountColor(2, 3)).toBe('var(--proc)')
+  })
+  it('all delivered → green (--ok)', () => {
+    expect(posCountColor(3, 3)).toBe('var(--ok)')
+  })
+  it('same logic for totals > 3', () => {
+    expect(posCountColor(0, 10)).toBe('var(--late)')
+    expect(posCountColor(4, 10)).toBe('var(--proc)')
+    expect(posCountColor(10, 10)).toBe('var(--ok)')
+  })
+  it('zero total (no positions) → faint', () => {
+    expect(posCountColor(0, 0)).toBe('var(--faint)')
   })
 })
 

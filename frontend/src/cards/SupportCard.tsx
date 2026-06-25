@@ -160,36 +160,34 @@ export function SupportCard() {
 
   return (
     <div className="wrap">
-      <div className="page-h">
-        <button className="btn" onClick={() => navigate('/soprovozhdenie')}>
-          ← В сопровождении
-        </button>
-        <h1>
-          <span className="tnum" style={{ color: 'var(--supp)' }}>{proc.code}</span> {proc.title}
-        </h1>
-      </div>
+      <button className="back" onClick={() => navigate('/soprovozhdenie')}>
+        ‹ В сопровождении
+      </button>
 
-      {/* Sister switcher (per-block routing) */}
+      {/* Sister switcher — единого вида с карточкой закупки (.crumbs + .sib) */}
       {sisters.length > 1 && (
-        <div className="sisters" style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
+        <div className="crumbs" style={{ marginBottom: 10 }}>
+          <span className="pcode">{proc.code}</span>
           {sisters.map((s) => (
             <button
               key={s.id}
-              className="chip proc mini"
-              style={{
-                border: 'none',
-                cursor: 'pointer',
-                fontFamily: 'inherit',
-                opacity: s.id === proc.id ? 1 : 0.6,
-                fontWeight: s.id === proc.id ? 700 : 400,
-              }}
+              type="button"
+              className={`sib${s.id === proc.id ? ' on' : ''}`}
               onClick={() => navigate(sisterRoute(s.block, s.id))}
             >
-              №{s.proc ?? s.id}
+              {s.proc ?? `#${s.id}`}
             </button>
           ))}
+          <span className="sp" />
         </div>
       )}
+
+      <div className="page-h">
+        <h1>
+          <span className="tnum" style={{ color: 'var(--supp)' }}>{proc.code}</span> {proc.title}
+        </h1>
+        <span className="sp" />
+      </div>
 
       <div className="block reg" style={{ '--bc': 'var(--supp)' } as CSSProperties}>
         <div className="block-h">

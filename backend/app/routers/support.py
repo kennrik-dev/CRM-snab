@@ -34,6 +34,7 @@ from app.schemas.deliveries import (
     DeliveryCreate,
     DeliveryOut,
     DeliveryPatch,
+    DeliveryPositionIn,
     DeliveryUpdOut,
     PaginatedSupport,
     SupportListItem,
@@ -201,9 +202,17 @@ def create_delivery(
     if proc.block != "soprovozhdenie":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="procedure is not in support block")
 
-    # Validate every position: exists, belongs to proc, still awaiting (delivery_id NULL).
+    # Normalize entries: int → (id, None=всё); {id, qty} → (id, qty) — частичная отгрузка.
+    entries: list[tuple[int, Optional[float]]] = []
+    for entry in payload.positions:
+        if isinstance(entry, int):
+            entries.append((entry, None))
+        else:
+            entries.append((entry.id, entry.qty))
+
+    # Validate every position: exists, belongs to proc, still awaiting, qty in range.
     seen: set[int] = set()
-    for pid in payload.positions:
+    for pid, qty in entries:
         pos = db.get(ProcedurePosition, pid)
         if pos is None or pos.procedure_id != proc.id:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="position not found")
@@ -213,6 +222,9 @@ def create_delivery(
         if pid in seen:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                                 detail="duplicate position in delivery")
+        if qty is not None and qty > pos.qty:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                detail="qty exceeds position quantity")
         seen.add(pid)
 
     next_n = (db.query(func.max(Delivery.n))
@@ -220,8 +232,25 @@ def create_delivery(
     d = Delivery(procedure_id=proc.id, n=next_n, status="transit")
     db.add(d)
     db.flush()  # assign d.id
-    for pid in payload.positions:
-        db.get(ProcedurePosition, pid).delivery_id = d.id
+    for pid, qty in entries:
+        pos = db.get(ProcedurePosition, pid)
+        target = pos.qty if qty is None else qty
+        if target < pos.qty:
+            # Частичная отгрузка: делим позицию. Оригинал становится отгружаемой
+            # частью (target), новый ряд — остаток-ожидание (можно отгрузить позже).
+            db.add(ProcedurePosition(
+                procedure_id=pos.procedure_id,
+                source_id=pos.source_id,
+                name=pos.name,
+                qty=pos.qty - target,
+                unit=pos.unit,
+                gost_tu=pos.gost_tu,
+                doc_code=pos.doc_code,
+                price=pos.price,
+                delivery_id=None,
+            ))
+            pos.qty = target
+        pos.delivery_id = d.id
 
     db.commit()
     db.refresh(d)

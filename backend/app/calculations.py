@@ -46,7 +46,8 @@ def procedure_sum(positions) -> int:
 
 def progress(positions, deliveries) -> tuple[int, int, float]:
     """(delivered, total, pct). total = #positions; delivered = #positions whose
-    delivery is 'done'. pct = delivered/total*100 (0.0 if total==0)."""
+    delivery is 'done' (получена). pct = delivered/total*100 (0.0 if total==0).
+    Count-based (по числу позиций, не штук) — см. colonку «Поз.» списка сопровождения."""
     positions = list(positions)
     total = len(positions)
     done_ids = {d.id for d in deliveries if getattr(d, "status", None) == "done"}

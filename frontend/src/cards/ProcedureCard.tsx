@@ -33,6 +33,7 @@ import { procStatusChip } from '../lib/statusColors'
 import { dateRu, money } from '../lib/format'
 import { canEdit } from '../lib/permissions'
 import { kopecksToRublesInput, rublesToKopecks } from '../lib/money'
+import { sisterRoute } from '../lib/supportView'
 
 // ---- Pure helpers ---------------------------------------------------------
 
@@ -560,7 +561,7 @@ export function ProcedureCard() {
                 key={s.id}
                 type="button"
                 className={`sib${s.id === procedureId ? ' on' : ''}`}
-                onClick={() => navigate(`/zakupka/${s.id}`)}
+                onClick={() => navigate(sisterRoute(s.block, s.id))}
               >
                 {s.proc ?? `#${s.id}`}
               </button>
