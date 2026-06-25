@@ -1,4 +1,5 @@
 import { apiFetch } from './client'
+import type { DeliveryOut } from './support'
 
 // ---- Types ----------------------------------------------------------------
 // Mirrors backend schemas/procedures.py EXACTLY (see plan 5.1/5.2):
@@ -52,6 +53,7 @@ export type ProcedurePosition = {
   gost_tu: string | null
   doc_code: string | null
   price: number | null // INTEGER kopecks
+  delivery_id: number | null // NULL = «ожидает отгрузки» (Фаза 6.2)
 }
 
 export type ProcedureDetail = {
@@ -70,8 +72,18 @@ export type ProcedureDetail = {
   zagruzka: string
   block: string
   status_zakup: string | null
+  // Б2 (Сопровождение, Фаза 6.2):
+  contract: string | null
+  fio_dogovornik: string | null
+  contract_sum: number | null
+  status_sdelki: string | null
+  status_postavki: string | null
+  srok_dd: string | null
+  plan_date: string | null
+  fakt_date: string | null
   created_at: string
   positions: ProcedurePosition[]
+  deliveries: DeliveryOut[]
 }
 
 export type ProcedurePatch = {
@@ -83,6 +95,15 @@ export type ProcedurePatch = {
   pub_start?: string | null
   pub_end?: string | null
   status_zakup?: string | null
+  // Б2 (Сопровождение):
+  contract?: string | null
+  fio_dogovornik?: string | null
+  contract_sum?: number | null
+  status_sdelki?: string | null
+  status_postavki?: string | null
+  srok_dd?: string | null
+  plan_date?: string | null
+  fakt_date?: string | null
 }
 
 export type SplitItem = {
