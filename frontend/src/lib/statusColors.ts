@@ -81,3 +81,24 @@ export function postavkiStatusChip(
       return { kind: 'proc', label: v }
   }
 }
+
+/**
+ * pay_status (+ overdue flag) → { chip kind, label }. Pure; unit-tested.
+ * Maps the «Оплаты» pay_status to the same color tokens the canon `.pchip`
+ * uses (proc/late/ok), rendered via the generic <Chip>.
+ * - 'paid'            → ok   «Оплачено» (paid is never overdue).
+ * - 'await' + overdue → late «Просрочена».
+ * - 'await'           → proc «Ожидает оплаты».
+ * - null/""           → wait «—».
+ */
+export function payStatusChip(
+  payStatus: string | null | undefined,
+  isOverdue: boolean = false,
+): { kind: ChipKind; label: string } {
+  if (payStatus === 'paid') return { kind: 'ok', label: 'Оплачено' }
+  if (payStatus === 'await') {
+    return isOverdue ? { kind: 'late', label: 'Просрочена' } : { kind: 'proc', label: 'Ожидает оплаты' }
+  }
+  if (!payStatus) return { kind: 'wait', label: '—' }
+  return { kind: 'wait', label: payStatus }
+}

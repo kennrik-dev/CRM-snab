@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { procStatusChip, sdelkiStatusChip, postavkiStatusChip } from './statusColors'
+import { procStatusChip, sdelkiStatusChip, postavkiStatusChip, payStatusChip } from './statusColors'
 
 // procStatusChip: each status_zakup value gets its OWN color; RED (late) is
 // reserved for «Отменена» only.
@@ -82,5 +82,24 @@ describe('postavkiStatusChip', () => {
   })
   it('unknown → proc fallback', () => {
     expect(postavkiStatusChip('???')).toEqual({ kind: 'proc', label: '???' })
+  })
+})
+
+describe('payStatusChip', () => {
+  it('paid → ok «Оплачено»', () => {
+    expect(payStatusChip('paid')).toEqual({ kind: 'ok', label: 'Оплачено' })
+    expect(payStatusChip('paid', true)).toEqual({ kind: 'ok', label: 'Оплачено' }) // paid is never overdue
+  })
+  it('await / not overdue → proc «Ожидает оплаты»', () => {
+    expect(payStatusChip('await', false)).toEqual({ kind: 'proc', label: 'Ожидает оплаты' })
+    expect(payStatusChip('await')).toEqual({ kind: 'proc', label: 'Ожидает оплаты' })
+  })
+  it('await / overdue → late «Просрочена»', () => {
+    expect(payStatusChip('await', true)).toEqual({ kind: 'late', label: 'Просрочена' })
+  })
+  it('null/undefined/"" → wait «—»', () => {
+    expect(payStatusChip(null)).toEqual({ kind: 'wait', label: '—' })
+    expect(payStatusChip(undefined)).toEqual({ kind: 'wait', label: '—' })
+    expect(payStatusChip('')).toEqual({ kind: 'wait', label: '—' })
   })
 })
