@@ -1,6 +1,7 @@
 """Derived calculations for the Сопровождение page (Phase 6.1).
 
-Pure functions over duck-typed objects (ORM rows OR SimpleNamespace in tests).
+Pure functions over duck-typed objects (ORM rows OR SimpleNamespace in tests);
+`payments_summary(db, today)` is the documented exception — it queries a db Session.
 Money is INTEGER kopecks; dates are ISO 'YYYY-MM-DD' strings; `today` is a
 `date` injected by the caller (tests fix it; routers call today_moscow()).
 
@@ -128,7 +129,7 @@ def payments_summary(db, today: date) -> dict:
              "bar": {paid, await_, delivered_no_upd, contracted_no_delivery}}.
     """
     from app.models import (
-        Delivery, ParentRequest, Procedure, ProcedurePosition, Tender, UpdPayment,
+        Delivery, Procedure, ProcedurePosition, UpdPayment,
     )
 
     active = or_(
