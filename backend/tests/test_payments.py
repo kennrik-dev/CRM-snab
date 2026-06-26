@@ -303,3 +303,59 @@ def test_get_payment_detail_manual_origin(client_admin):
 
 def test_get_payment_not_found_404(client_admin):
     assert client_admin.get("/payments/99999").status_code == 404
+
+
+# --- 7.1 Task 4: PATCH /payments/{id} ------------------------------------------
+
+def test_patch_payment_fields_persist(client_admin):
+    created = client_admin.post("/payments", json={
+        "upd": "UPD-PAT", "supplier": "S", "amount": 1000,
+    }).json()
+    r = client_admin.patch(f"/payments/{created['id']}", json={
+        "srok": "2026-08-01", "zrds": "ЗРДС-9", "contract": "ДК-1",
+        "supplier": "ООО Дуб", "amount": 999000,
+    })
+    assert r.status_code == 200, r.text
+    got = r.json()
+    assert got["srok"] == "2026-08-01"
+    assert got["zrds"] == "ЗРДС-9"
+    assert got["contract"] == "ДК-1"
+    assert got["supplier"] == "ООО Дуб"
+    assert got["amount"] == 999000
+
+
+def test_patch_payment_positions_replace(client_admin):
+    created = client_admin.post("/payments", json={
+        "upd": "UPD-PATPOS", "supplier": "S",
+        "positions": [{"name": "a", "qty": 1.0, "price": 100}],
+    }).json()
+    r = client_admin.patch(f"/payments/{created['id']}", json={
+        "positions": [{"name": "b", "qty": 2.0, "price": 200},
+                      {"name": "c", "qty": 3.0, "price": 300}],
+    })
+    assert r.status_code == 200, r.text
+    names = [p["name"] for p in r.json()["positions"]]
+    assert names == ["b", "c"]            # old "a" gone → full replace
+
+
+def test_patch_payment_rbac_403_for_kompl(client_seeded, db_seeded, client_admin):
+    created = client_admin.post("/payments", json={"upd": "UPD-PATR", "supplier": "S"}).json()
+    u = _make_kompl_emp(db_seeded)
+    _login_as(client_seeded, u.email)
+    r = client_seeded.patch(f"/payments/{created['id']}", json={"supplier": "X"})
+    assert r.status_code == 403
+
+
+def test_patch_payment_writes_audit(client_admin, db_seeded):
+    from app.models import AuditLog
+    created = client_admin.post("/payments", json={"upd": "UPD-PATAD", "supplier": "S"}).json()
+    client_admin.patch(f"/payments/{created['id']}", json={"amount": 5000})
+    db_seeded.expire_all()
+    rows = db_seeded.query(AuditLog).filter_by(
+        entity_kind="upd_payment", entity_id=created["id"], action="payment_patch"
+    ).all()
+    assert len(rows) == 1
+
+
+def test_patch_payment_not_found_404(client_admin):
+    assert client_admin.patch("/payments/99999", json={"amount": 1}).status_code == 404

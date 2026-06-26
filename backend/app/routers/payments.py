@@ -32,6 +32,7 @@ from app.schemas.payments import (
     PaymentDetail,
     PaymentDeliveryOut,
     PaymentListItem,
+    PaymentPatch,
     UpdPositionOut,
 )
 
@@ -235,4 +236,41 @@ def get_payment(
     upd = db.get(UpdPayment, payment_id)
     if upd is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="payment not found")
+    return _detail(db, upd)
+
+
+@router.patch("/{payment_id}", response_model=PaymentDetail)
+def patch_payment(
+    payment_id: int,
+    payload: PaymentPatch,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_action("soprovozhdenie", "edit")),
+) -> PaymentDetail:
+    upd = db.get(UpdPayment, payment_id)
+    if upd is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="payment not found")
+    data = payload.model_dump(exclude_unset=True)
+    for f in ("srok", "zrds", "contract", "supplier", "amount"):
+        if f in data:
+            setattr(upd, f, data[f])
+    if "positions" in data:
+        # полная замена строк upd_position
+        db.query(UpdPosition).filter(UpdPosition.upd_payment_id == upd.id).delete()
+        for i, p in enumerate(payload.positions or [], start=1):
+            db.add(
+                UpdPosition(
+                    upd_payment_id=upd.id,
+                    n=p.n if p.n is not None else i,
+                    name=p.name,
+                    unit=p.unit,
+                    qty=p.qty,
+                    price=p.price,
+                )
+            )
+    db.commit()
+    db.refresh(upd)
+    write_audit(
+        db, entity_kind="upd_payment", entity_id=upd.id,
+        user=current_user, action="payment_patch",
+    )
     return _detail(db, upd)
