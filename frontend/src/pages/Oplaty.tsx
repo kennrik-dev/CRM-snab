@@ -1,19 +1,25 @@
-import { useMemo, useState, useEffect, type CSSProperties } from 'react'
+import { useMemo, useState, useEffect, type CSSProperties, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   listPayments,
   getPaymentsSummary,
+  createPayment,
   type PaymentListItem,
   type PaymentSort,
+  type PaymentCreate,
 } from '../api/payments'
 import { buildPayBar } from '../lib/payView'
 import { DataTable, type DataTableColumn } from '../components/DataTable'
 import { FilterBar } from '../components/FilterBar'
 import { EmptyState } from '../components/EmptyState'
 import { Chip } from '../components/Chip'
+import { Modal } from '../components/Modal'
 import { payStatusChip } from '../lib/statusColors'
 import { money, dateRu } from '../lib/format'
+import { rublesToKopecks } from '../lib/money'
+import { canEdit } from '../lib/permissions'
+import { useAuth } from '../auth/AuthContext'
 
 const SORT_OPTIONS: { value: PaymentSort; label: string }[] = [
   { value: 'created_at', label: 'По дате создания' },
@@ -91,6 +97,18 @@ function PaySummary() {
 
 export function Oplaty() {
   const navigate = useNavigate()
+  const qc = useQueryClient()
+  const { permissions } = useAuth()
+  const canEditThis = canEdit(permissions, 'soprovozhdenie')
+  const [addOpen, setAddOpen] = useState(false)
+
+  const createMut = useMutation({
+    mutationFn: (payload: PaymentCreate) => createPayment(payload),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['payments'] })
+      setAddOpen(false)
+    },
+  })
 
   const [searchInput, setSearchInput] = useState('')
   const [nonSearch, setNonSearch] = useState<{ hide_paid: boolean; sort: PaymentSort }>({
@@ -188,7 +206,15 @@ export function Oplaty() {
 
       <PaySummary />
 
-      <FilterBar>
+      <FilterBar
+        actions={
+          canEditThis ? (
+            <button className="btn primary" onClick={() => setAddOpen(true)}>
+              + Добавить УПД
+            </button>
+          ) : undefined
+        }
+      >
         <input
           type="text"
           className="rep-sel"
@@ -259,6 +285,151 @@ export function Oplaty() {
           )}
         </div>
       </div>
+
+      {addOpen && (
+        <AddUpdModal
+          onClose={() => setAddOpen(false)}
+          onCreate={(payload) => createMut.mutate(payload)}
+          pending={createMut.isPending}
+        />
+      )}
     </div>
+  )
+}
+
+// ---- Add-УПД modal (manual) -----------------------------------------------
+
+const addFieldStyle: CSSProperties = {
+  padding: '6px 8px',
+  border: '1px solid var(--line)',
+  borderRadius: 4,
+  fontSize: 13,
+  background: 'var(--surface)',
+  width: '100%',
+}
+const addLabelStyle: CSSProperties = {
+  fontSize: 10,
+  letterSpacing: '0.06em',
+  textTransform: 'uppercase',
+  color: 'var(--faint)',
+  fontWeight: 600,
+  marginBottom: 3,
+  display: 'block',
+}
+
+function Field({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div>
+      <span style={addLabelStyle}>{label}</span>
+      {children}
+    </div>
+  )
+}
+
+// Mount-controlled (like SplitDialog in ProcedureCard): the parent renders
+// `{addOpen && <AddUpdModal .../>}` so each open gets a fresh form state.
+function AddUpdModal({
+  onClose,
+  onCreate,
+  pending,
+}: {
+  onClose: () => void
+  onCreate: (payload: PaymentCreate) => void
+  pending: boolean
+}) {
+  const [f, setF] = useState({
+    upd: '',
+    request_label: '',
+    supplier: '',
+    srok: '',
+    amount: '',
+    zrds: '',
+  })
+  const valid = f.upd.trim() !== ''
+
+  function submit() {
+    if (!valid || pending) return
+    onCreate({
+      upd: f.upd.trim(),
+      request_label: f.request_label.trim() || undefined,
+      supplier: f.supplier.trim() || undefined,
+      srok: f.srok || undefined,
+      amount: rublesToKopecks(f.amount) ?? undefined,
+      zrds: f.zrds.trim() || undefined,
+    })
+  }
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title="Добавить УПД"
+      width={560}
+      footer={
+        <>
+          <button className="btn" onClick={onClose} disabled={pending}>
+            Отмена
+          </button>
+          <button className="btn primary" onClick={submit} disabled={!valid || pending}>
+            {pending ? 'Сохранение…' : 'Сохранить'}
+          </button>
+        </>
+      }
+    >
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+        <Field label="№ УПД *">
+          <input
+            style={addFieldStyle}
+            value={f.upd}
+            onChange={(e) => setF((s) => ({ ...s, upd: e.target.value }))}
+            disabled={pending}
+          />
+        </Field>
+        <Field label="Заявка">
+          <input
+            style={addFieldStyle}
+            placeholder="Т-67 + №"
+            value={f.request_label}
+            onChange={(e) => setF((s) => ({ ...s, request_label: e.target.value }))}
+            disabled={pending}
+          />
+        </Field>
+        <Field label="Поставщик">
+          <input
+            style={addFieldStyle}
+            value={f.supplier}
+            onChange={(e) => setF((s) => ({ ...s, supplier: e.target.value }))}
+            disabled={pending}
+          />
+        </Field>
+        <Field label="Срок">
+          <input
+            type="date"
+            style={addFieldStyle}
+            value={f.srok}
+            onChange={(e) => setF((s) => ({ ...s, srok: e.target.value }))}
+            disabled={pending}
+          />
+        </Field>
+        <Field label="Сумма с НДС (₽)">
+          <input
+            style={addFieldStyle}
+            inputMode="decimal"
+            placeholder="0,00"
+            value={f.amount}
+            onChange={(e) => setF((s) => ({ ...s, amount: e.target.value }))}
+            disabled={pending}
+          />
+        </Field>
+        <Field label="№ ЗРДС">
+          <input
+            style={addFieldStyle}
+            value={f.zrds}
+            onChange={(e) => setF((s) => ({ ...s, zrds: e.target.value }))}
+            disabled={pending}
+          />
+        </Field>
+      </div>
+    </Modal>
   )
 }
