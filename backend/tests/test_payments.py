@@ -359,3 +359,56 @@ def test_patch_payment_writes_audit(client_admin, db_seeded):
 
 def test_patch_payment_not_found_404(client_admin):
     assert client_admin.patch("/payments/99999", json={"amount": 1}).status_code == 404
+
+
+# --- 7.1 Task 5: POST /payments/{id}/pay ---------------------------------------
+
+def test_pay_payment_sets_paid_and_date(client_admin):
+    created = client_admin.post("/payments", json={
+        "upd": "UPD-PAY", "supplier": "S", "amount": 500000,
+    }).json()
+    r = client_admin.post(f"/payments/{created['id']}/pay")
+    assert r.status_code == 200, r.text
+    got = r.json()
+    assert got["pay_status"] == "paid"
+    assert got["pay_date"] is not None           # ISO today
+    assert got["is_overdue"] is False            # paid → never overdue
+
+
+def test_pay_payment_double_409(client_admin):
+    created = client_admin.post("/payments", json={"upd": "UPD-PAY2", "supplier": "S"}).json()
+    client_admin.post(f"/payments/{created['id']}/pay")
+    r = client_admin.post(f"/payments/{created['id']}/pay")
+    assert r.status_code == 409
+
+
+def test_pay_payment_not_found_404(client_admin):
+    assert client_admin.post("/payments/99999/pay").status_code == 404
+
+
+def test_pay_payment_rbac_403_for_kompl(client_seeded, db_seeded, client_admin):
+    created = client_admin.post("/payments", json={"upd": "UPD-PAYR", "supplier": "S"}).json()
+    u = _make_kompl_emp(db_seeded)
+    _login_as(client_seeded, u.email)
+    r = client_seeded.post(f"/payments/{created['id']}/pay")
+    assert r.status_code == 403
+
+
+def test_pay_payment_writes_audit(client_admin, db_seeded):
+    from app.models import AuditLog
+    created = client_admin.post("/payments", json={"upd": "UPD-PAYAD", "supplier": "S"}).json()
+    client_admin.post(f"/payments/{created['id']}/pay")
+    db_seeded.expire_all()
+    rows = db_seeded.query(AuditLog).filter_by(
+        entity_kind="upd_payment", entity_id=created["id"], action="payment_pay"
+    ).all()
+    assert len(rows) == 1
+
+
+def test_list_hide_paid_excludes_paid(client_admin):
+    created = client_admin.post("/payments", json={"upd": "UPD-HIDE", "supplier": "S"}).json()
+    client_admin.post(f"/payments/{created['id']}/pay")
+    all_items = client_admin.get("/payments").json()["items"]
+    hidden = client_admin.get("/payments?hide_paid=true").json()["items"]
+    assert any(i["upd"] == "UPD-HIDE" for i in all_items)
+    assert not any(i["upd"] == "UPD-HIDE" for i in hidden)

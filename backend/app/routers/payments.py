@@ -274,3 +274,25 @@ def patch_payment(
         user=current_user, action="payment_patch",
     )
     return _detail(db, upd)
+
+
+@router.post("/{payment_id}/pay", response_model=PaymentDetail)
+def pay_payment(
+    payment_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_action("soprovozhdenie", "edit")),
+) -> PaymentDetail:
+    upd = db.get(UpdPayment, payment_id)
+    if upd is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="payment not found")
+    if upd.pay_status == "paid":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="payment already paid")
+    upd.pay_status = "paid"
+    upd.pay_date = calc.today_moscow().isoformat()
+    db.commit()
+    db.refresh(upd)
+    write_audit(
+        db, entity_kind="upd_payment", entity_id=upd.id,
+        user=current_user, action="payment_pay",
+    )
+    return _detail(db, upd)
