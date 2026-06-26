@@ -192,3 +192,80 @@ def test_payments_list_excludes_cancelled_procedure(client_admin):
     client_admin.patch(f"/procedures/{proc_id}", json={"status_postavki": "Отменена"})
     body = client_admin.get("/payments").json()
     assert body["total"] == 0
+
+
+# --- 7.1 Task 2: POST /payments (manual УПД) -----------------------------------
+
+def test_create_manual_upd_happy(client_admin, db_seeded):
+    from app.models import UpdPayment
+    r = client_admin.post("/payments", json={
+        "upd": "UPD-MAN-1", "request_label": "Т-99 №3",
+        "supplier": "ООО Ромашка", "srok": "2026-12-31",
+        "amount": 1500000, "zrds": "ЗРДС-5",
+        "positions": [{"n": 1, "name": "болт", "unit": "шт", "qty": 10.0, "price": 150000}],
+    })
+    assert r.status_code == 201, r.text
+    got = r.json()
+    assert got["origin"] == "manual"
+    assert got["pay_status"] == "await"
+    assert got["amount"] == 1500000
+    assert got["delivery_id"] is None
+    assert got["delivery"] is None
+    assert len(got["positions"]) == 1
+    assert got["positions"][0]["name"] == "болт"
+    # persisted
+    db_seeded.expire_all()
+    row = db_seeded.query(UpdPayment).filter_by(upd="UPD-MAN-1").one()
+    assert row.origin == "manual"
+    assert row.contract is None              # у manual нет договора при создании
+
+
+def test_create_manual_upd_amount_from_positions(client_admin):
+    r = client_admin.post("/payments", json={
+        "upd": "UPD-MAN-2", "supplier": "С",
+        "positions": [{"qty": 2.0, "price": 5000}, {"qty": 1.0, "price": 10000}],
+    })
+    assert r.status_code == 201, r.text
+    assert r.json()["amount"] == 20000       # 2*5000 + 1*10000
+
+
+def test_create_manual_upd_empty_upd_422(client_admin):
+    r = client_admin.post("/payments", json={"upd": ""})
+    assert r.status_code == 422
+
+
+def test_create_manual_upd_rbac_ok_for_soprov_emp(client_seeded, db_seeded, client_admin):
+    _ = client_admin  # seed/seed admin not strictly needed but keeps fixtures warm
+    u = _make_soprov_emp(db_seeded)
+    _login_as(client_seeded, u.email)
+    r = client_seeded.post("/payments", json={"upd": "UPD-EMP", "supplier": "S"})
+    assert r.status_code == 201, r.text
+
+
+def test_create_manual_upd_rbac_403_for_kompl_emp(client_seeded, db_seeded, client_admin):
+    u = _make_kompl_emp(db_seeded)
+    _login_as(client_seeded, u.email)
+    r = client_seeded.post("/payments", json={"upd": "UPD-KOMPL", "supplier": "S"})
+    assert r.status_code == 403
+
+
+def test_create_manual_upd_writes_audit(client_admin, db_seeded):
+    from app.models import AuditLog, UpdPayment
+    client_admin.post("/payments", json={"upd": "UPD-AUD", "supplier": "S"})
+    db_seeded.expire_all()
+    payment = db_seeded.query(UpdPayment).filter_by(upd="UPD-AUD").one()
+    rows = db_seeded.query(AuditLog).filter_by(
+        entity_kind="upd_payment", entity_id=payment.id, action="payment_create"
+    ).all()
+    assert len(rows) == 1
+
+
+def test_manual_upd_appears_in_list(client_admin):
+    client_admin.post("/payments", json={
+        "upd": "UPD-MAN-L", "request_label": "Т-70 №1", "supplier": "Поставщик",
+    })
+    body = client_admin.get("/payments").json()
+    item = next(i for i in body["items"] if i["upd"] == "UPD-MAN-L")
+    assert item["origin"] == "manual"
+    assert item["request_display"] == "Т-70 №1"
+    assert item["delivery_n"] is None

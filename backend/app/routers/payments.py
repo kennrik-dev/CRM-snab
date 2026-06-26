@@ -22,12 +22,17 @@ from app.models import (
     Procedure,
     Tender,
     UpdPayment,
+    UpdPosition,
     User,
 )
 from app.permissions import require_action
 from app.schemas.payments import (
     PaginatedPayments,
+    PaymentCreate,
+    PaymentDetail,
+    PaymentDeliveryOut,
     PaymentListItem,
+    UpdPositionOut,
 )
 
 
@@ -134,3 +139,88 @@ def list_payments(
             )
         )
     return PaginatedPayments(items=items, total=page_data["total"])
+
+
+def _detail(db: Session, upd: UpdPayment) -> PaymentDetail:
+    positions = (
+        db.query(UpdPosition)
+        .filter(UpdPosition.upd_payment_id == upd.id)
+        .order_by(UpdPosition.id.asc())
+        .all()
+    )
+    delivery = None
+    if upd.delivery_id is not None:
+        d = db.get(Delivery, upd.delivery_id)
+        if d is not None:
+            parent_code = None
+            proc = db.get(Procedure, d.procedure_id)
+            if proc is not None:
+                tender = db.get(Tender, proc.tender_id)
+                if tender is not None:
+                    parent = db.get(ParentRequest, tender.parent_id)
+                    parent_code = parent.code if parent else None
+            delivery = PaymentDeliveryOut(
+                n=d.n, procedure_id=d.procedure_id, parent_code=parent_code
+            )
+    return PaymentDetail(
+        id=upd.id,
+        upd=upd.upd,
+        origin=upd.origin,
+        delivery_id=upd.delivery_id,
+        request_label=upd.request_label,
+        supplier=upd.supplier,
+        contract=upd.contract,
+        zrds=upd.zrds,
+        srok=upd.srok,
+        amount=upd.amount,
+        pay_status=upd.pay_status,
+        pay_date=upd.pay_date,
+        created_at=upd.created_at,
+        positions=[UpdPositionOut.model_validate(p) for p in positions],
+        delivery=delivery,
+        is_overdue=calc.is_upd_overdue(upd, calc.today_moscow()),
+    )
+
+
+@router.post("", response_model=PaymentDetail, status_code=status.HTTP_201_CREATED)
+def create_payment(
+    payload: PaymentCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_action("soprovozhdenie", "edit")),
+) -> PaymentDetail:
+    amount = payload.amount
+    if amount is None and payload.positions:
+        amount = calc.procedure_sum(payload.positions) or None
+    new = UpdPayment(
+        upd=payload.upd,
+        origin="manual",
+        delivery_id=None,
+        request_label=payload.request_label,
+        supplier=payload.supplier,
+        contract=None,
+        zrds=payload.zrds,
+        srok=payload.srok,
+        amount=amount,
+        pay_status="await",
+    )
+    db.add(new)
+    db.flush()  # assign new.id
+    if payload.positions:
+        for i, p in enumerate(payload.positions, start=1):
+            db.add(
+                UpdPosition(
+                    upd_payment_id=new.id,
+                    n=p.n if p.n is not None else i,
+                    name=p.name,
+                    unit=p.unit,
+                    qty=p.qty,
+                    price=p.price,
+                )
+            )
+    db.commit()
+    db.refresh(new)
+    write_audit(
+        db, entity_kind="upd_payment", entity_id=new.id,
+        user=current_user, action="payment_create",
+    )
+    return _detail(db, new)
