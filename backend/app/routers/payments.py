@@ -224,3 +224,15 @@ def create_payment(
         user=current_user, action="payment_create",
     )
     return _detail(db, new)
+
+
+@router.get("/{payment_id}", response_model=PaymentDetail)
+def get_payment(
+    payment_id: int,
+    db: Session = Depends(get_db),
+    _user: User = Depends(require_password_changed),
+) -> PaymentDetail:
+    upd = db.get(UpdPayment, payment_id)
+    if upd is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="payment not found")
+    return _detail(db, upd)

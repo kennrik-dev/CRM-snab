@@ -269,3 +269,37 @@ def test_manual_upd_appears_in_list(client_admin):
     assert item["origin"] == "manual"
     assert item["request_display"] == "Т-70 №1"
     assert item["delivery_n"] is None
+
+
+# --- 7.1 Task 3: GET /payments/{id} (detail) -----------------------------------
+
+def test_get_payment_detail_delivery_origin(client_admin):
+    proc_id, d, _upd = _delivery_upd(
+        client_admin, "PAY-DET", "detail",
+        [{"name": "x", "qty": 1.0, "price": 7000}],
+    )
+    list_item = client_admin.get("/payments").json()["items"][0]
+    pid = list_item["id"]
+    r = client_admin.get(f"/payments/{pid}")
+    assert r.status_code == 200, r.text
+    got = r.json()
+    assert got["origin"] == "delivery"
+    assert got["amount"] == 7000
+    assert got["delivery"] == {"n": 1, "procedure_id": proc_id, "parent_code": "PAY-DET"}
+    assert got["is_overdue"] is False
+
+
+def test_get_payment_detail_manual_origin(client_admin):
+    created = client_admin.post("/payments", json={
+        "upd": "UPD-DET-M", "request_label": "Т-1", "supplier": "S",
+        "positions": [{"name": "гайка", "qty": 3.0, "price": 1000}],
+    }).json()
+    r = client_admin.get(f"/payments/{created['id']}")
+    assert r.status_code == 200
+    got = r.json()
+    assert got["delivery"] is None
+    assert got["positions"][0]["name"] == "гайка"
+
+
+def test_get_payment_not_found_404(client_admin):
+    assert client_admin.get("/payments/99999").status_code == 404
