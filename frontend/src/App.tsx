@@ -9,6 +9,7 @@ import { RequireAuth, RequireAuthOrChange, RequireNoAuth } from './auth/Guards'
 import { Komplektaciya } from './pages/Komplektaciya'
 import { Zakupka } from './pages/Zakupka'
 import { Soprovozhdenie } from './pages/Soprovozhdenie'
+import { Oplaty } from './pages/Oplaty'
 import { RequestCard } from './cards/RequestCard'
 import { ProcedureCard } from './cards/ProcedureCard'
 import { SupportCard } from './cards/SupportCard'
@@ -37,7 +38,7 @@ function AppShell() {
         <Route path="/zakupka/:id" element={<ProcedureCard />} />
         <Route path="/soprovozhdenie" element={<Soprovozhdenie />} />
         <Route path="/soprovozhdenie/:id" element={<SupportCard />} />
-        <Route path="/oplaty" element={<PlaceholderPage title="Оплаты" />} />
+        <Route path="/oplaty" element={<Oplaty />} />
         <Route path="/otchety" element={<PlaceholderPage title="Отчёты" />} />
       </Routes>
     </>
