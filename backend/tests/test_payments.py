@@ -412,3 +412,58 @@ def test_list_hide_paid_excludes_paid(client_admin):
     hidden = client_admin.get("/payments?hide_paid=true").json()["items"]
     assert any(i["upd"] == "UPD-HIDE" for i in all_items)
     assert not any(i["upd"] == "UPD-HIDE" for i in hidden)
+
+
+# --- 7.1 Task 6: payments_summary + GET /payments/summary ----------------------
+
+def test_summary_meters_paid_await_overdue(client_admin):
+    # 2 manual УПД: one paid 1000000, one await 500000 with past srok → overdue
+    a = client_admin.post("/payments", json={
+        "upd": "UPD-SUM-A", "amount": 1000000,
+    }).json()
+    client_admin.post(f"/payments/{a['id']}/pay")
+    b = client_admin.post("/payments", json={
+        "upd": "UPD-SUM-B", "amount": 500000, "srok": "2026-06-01",  # past → overdue
+    }).json()
+    r = client_admin.get("/payments/summary")
+    assert r.status_code == 200, r.text
+    m = r.json()["meters"]
+    assert m["paid"] == 1000000
+    assert m["await_"] == 500000
+    assert m["overdue"] == 500000
+    assert m["in_work"] == 1500000
+
+
+def test_summary_bar_segments(client_admin):
+    """Один delivery-УПД (покрыт) + одна доставленная позиция без УПД +
+    одна позиция в процедуре без поставки."""
+    # 1) delivery УПД paid — covered delivery
+    proc_id, d, _upd = _delivery_upd(
+        client_admin, "SUM-DEL", "del",
+        [{"name": "x", "qty": 1.0, "price": 300000}],
+    )
+    list_id = client_admin.get("/payments").json()["items"][0]["id"]
+    client_admin.post(f"/payments/{list_id}/pay")
+    # 2) delivered position with NO УПД → delivered_no_upd
+    proc2 = _to_support(client_admin, "SUM-NOUPD", "no_upd",
+                        [{"name": "y", "qty": 1.0, "price": 200000}])
+    pid2 = _position_ids(client_admin, proc2)[0]
+    client_admin.post(f"/procedures/{proc2}/deliveries", json={"positions": [pid2]})
+    # 3) procedure with positions but NO delivery → contracted_no_delivery
+    _to_support(client_admin, "SUM-NODEL", "no_del",
+                [{"name": "z", "qty": 1.0, "price": 400000}])
+    bar = client_admin.get("/payments/summary").json()["bar"]
+    assert bar["paid"] == 300000
+    assert bar["await_"] == 0
+    assert bar["delivered_no_upd"] == 200000
+    assert bar["contracted_no_delivery"] == 400000
+
+
+def test_summary_excludes_cancelled_procedure(client_admin):
+    proc_id, d, _upd = _delivery_upd(
+        client_admin, "SUM-CXL", "cxl",
+        [{"name": "x", "qty": 1.0, "price": 100000}],
+    )
+    client_admin.patch(f"/procedures/{proc_id}", json={"status_postavki": "Отменена"})
+    m = client_admin.get("/payments/summary").json()["meters"]
+    assert m["paid"] == 0 and m["await_"] == 0

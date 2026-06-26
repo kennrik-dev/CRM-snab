@@ -33,6 +33,9 @@ from app.schemas.payments import (
     PaymentDeliveryOut,
     PaymentListItem,
     PaymentPatch,
+    PaymentsSummary,
+    SummaryBar,
+    SummaryMeters,
     UpdPositionOut,
 )
 
@@ -225,6 +228,18 @@ def create_payment(
         user=current_user, action="payment_create",
     )
     return _detail(db, new)
+
+
+@router.get("/summary", response_model=PaymentsSummary)
+def payments_summary_endpoint(
+    db: Session = Depends(get_db),
+    _user: User = Depends(require_password_changed),
+) -> PaymentsSummary:
+    data = calc.payments_summary(db, calc.today_moscow())
+    return PaymentsSummary(
+        meters=SummaryMeters(**data["meters"]),
+        bar=SummaryBar(**data["bar"]),
+    )
 
 
 @router.get("/{payment_id}", response_model=PaymentDetail)

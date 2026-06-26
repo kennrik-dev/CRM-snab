@@ -11,6 +11,8 @@ from __future__ import annotations
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
+from sqlalchemy import or_
+
 MOSCOW = ZoneInfo("Europe/Moscow")
 
 _DOC_KEYS = ("ttn", "m15", "upd", "sert")
@@ -118,6 +120,73 @@ def is_upd_overdue(upd, today: date) -> bool:
     return srok is not None and srok < today
 
 
+def payments_summary(db, today: date) -> dict:
+    """Сводка «Оплаты» (docs/32 §7). Суммы — int коп. (None-amount → 0).
+    Исключает УПД отменённых процедур; manual-УПД (без процедуры) учитываются.
+
+    Returns {"meters": {paid, await_, overdue, in_work},
+             "bar": {paid, await_, delivered_no_upd, contracted_no_delivery}}.
+    """
+    from app.models import (
+        Delivery, ParentRequest, Procedure, ProcedurePosition, Tender, UpdPayment,
+    )
+
+    active = or_(
+        Procedure.status_postavki.is_(None),
+        Procedure.status_postavki != "Отменена",
+    )
+
+    upds = (
+        db.query(UpdPayment)
+        .join(Delivery, UpdPayment.delivery_id == Delivery.id, isouter=True)
+        .join(Procedure, Delivery.procedure_id == Procedure.id, isouter=True)
+        .filter(active)
+        .all()
+    )
+    paid = sum((u.amount or 0) for u in upds if u.pay_status == "paid")
+    await_ = sum((u.amount or 0) for u in upds if u.pay_status == "await")
+    overdue = sum(
+        (u.amount or 0) for u in upds
+        if u.pay_status == "await" and is_upd_overdue(u, today)
+    )
+    in_work = paid + await_
+
+    # Поставки, покрытые УПД (есть upd_payment)
+    covered = {u.delivery_id for u in upds if u.delivery_id is not None}
+
+    active_proc_ids = {
+        p.id for p in db.query(Procedure).filter(active).all()
+    }
+    procs_with_delivery = {
+        d.procedure_id for d in
+        db.query(Delivery).filter(Delivery.procedure_id.in_(active_proc_ids)).all()
+    }
+
+    delivered_no_upd = 0
+    contracted_no_delivery = 0
+    pos_rows = (
+        db.query(ProcedurePosition)
+        .filter(ProcedurePosition.procedure_id.in_(active_proc_ids))
+        .all()
+    )
+    for p in pos_rows:
+        s = position_sum(p)
+        if p.delivery_id is not None and p.delivery_id not in covered:
+            delivered_no_upd += s
+        if p.procedure_id not in procs_with_delivery:
+            contracted_no_delivery += s
+
+    return {
+        "meters": {"paid": paid, "await_": await_, "overdue": overdue, "in_work": in_work},
+        "bar": {
+            "paid": paid,
+            "await_": await_,
+            "delivered_no_upd": delivered_no_upd,
+            "contracted_no_delivery": contracted_no_delivery,
+        },
+    }
+
+
 __all__ = [
     "today_moscow",
     "position_sum",
@@ -129,4 +198,5 @@ __all__ = [
     "overdue_pct",
     "docs_aggregate",
     "is_upd_overdue",
+    "payments_summary",
 ]
