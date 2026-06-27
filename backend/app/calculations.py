@@ -514,7 +514,7 @@ def _dash_attention(ctx) -> list:
 def _dash_feed(db) -> list:
     """«Лента событий» (spec §7): last 20 audit_log, newest first."""
     from app.models import (
-        AuditLog, ParentRequest, Procedure, UpdPayment, User,
+        AuditLog, ParentRequest, Procedure, Tender, UpdPayment, User,
     )
 
     rows = (
@@ -533,9 +533,22 @@ def _dash_feed(db) -> list:
     code_map = {pid: code for pid, code in
                 db.query(ParentRequest.id, ParentRequest.code)
                 .filter(ParentRequest.id.in_(parent_ids)).all()} if parent_ids else {}
-    proc_map = {pid: proc for pid, proc in
-                db.query(Procedure.id, Procedure.proc)
-                .filter(Procedure.id.in_(proc_ids)).all()} if proc_ids else {}
+    # procedure rows: identify the procedure (proc, else parent-code fallback) AND its
+    # block, so the feed always names which procedure + which department (user request).
+    _BLOCK_RU = {"zakupka": "закупка", "soprovozhdenie": "сопровождение"}
+    proc_info = {}
+    if proc_ids:
+        prow = (db.query(Procedure.id, Procedure.proc, Procedure.block, Tender.parent_id)
+                .outerjoin(Tender, Procedure.tender_id == Tender.id)
+                .filter(Procedure.id.in_(proc_ids)).all())
+        pp_ids = {p[3] for p in prow if p[3] is not None}
+        pp_codes = {i: c for i, c in
+                    db.query(ParentRequest.id, ParentRequest.code)
+                    .filter(ParentRequest.id.in_(pp_ids)).all()} if pp_ids else {}
+        for pid, pproc, pblock, parent_id in prow:
+            ident = pproc or pp_codes.get(parent_id) or f"#{pid}"
+            br = _BLOCK_RU.get(pblock or "", "")
+            proc_info[pid] = f"{ident} ({br})" if br else ident
     upd_map = {uid: upd for uid, upd in
                db.query(UpdPayment.id, UpdPayment.upd)
                .filter(UpdPayment.id.in_(upd_ids)).all()} if upd_ids else {}
@@ -549,7 +562,7 @@ def _dash_feed(db) -> list:
         if kind in ("parent", "parent_request"):
             display = code_map.get(log.entity_id)
         elif kind == "procedure":
-            display = proc_map.get(log.entity_id)
+            display = proc_info.get(log.entity_id)
         elif kind == "upd_payment":
             display = upd_map.get(log.entity_id)
         else:

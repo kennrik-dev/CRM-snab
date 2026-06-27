@@ -412,6 +412,35 @@ def test_feed_capped_at_20(client_admin):
     assert len(_feed(client_admin)) == 20
 
 
+def test_feed_procedure_row_names_proc_and_block(client_admin):
+    """Feed procedure rows identify the procedure + its block (user request)."""
+    # zakupka procedure: updating it audits ("procedure","update"), block=zakupka
+    zid = _to_zakupka(client_admin, "F-PB1", "zakupka proc", POS1)
+    client_admin.patch(f"/procedures/{zid}", json={"status_zakup": "Торги"})
+    # support procedure: to-support + delivery issue procedure rows, block=soprovozhdenie
+    _delivery_upd(client_admin, "F-PB2", "support proc", POS1)
+    feed = _feed(client_admin)
+    proc_rows = [f for f in feed if f.get("target") and f["target"]["kind"] == "procedure"]
+    assert proc_rows, "expected procedure-kind feed rows"
+    displays = [f["entity_display"] for f in proc_rows]
+    assert all(displays), "every procedure row must carry an entity_display"
+    assert any("(закупка)" in d for d in displays)
+    assert any("(сопровождение)" in d for d in displays)
+
+
+def test_feed_procedure_row_fallback_when_proc_empty(db_seeded, client_admin):
+    """Empty proc falls back to the parent code so the procedure stays identifiable."""
+    zid = _to_zakupka(client_admin, "F-EP", "empty proc", POS1)
+    client_admin.patch(f"/procedures/{zid}", json={"status_zakup": "Торги"})
+    _set_proc(db_seeded, zid, proc=None)  # wipe the proc number (the proc-10 data case)
+    feed = _feed(client_admin)
+    proc_rows = [f for f in feed if f.get("target") and f["target"]["kind"] == "procedure"]
+    top = proc_rows[0]
+    assert top["entity_display"], "fallback must produce a non-empty display"
+    assert "(закупка)" in top["entity_display"]
+    assert "F-EP" in top["entity_display"], "fallback should surface the parent code"
+
+
 # --- 8.1 Task 5: compact tables -----------------------------------------------
 
 def _tables(client):
