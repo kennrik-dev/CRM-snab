@@ -93,7 +93,7 @@ function AttentionPanel({
               key={i}
               className="alert"
               style={{
-                '--al': `var(${a.severity === 'error' ? 'late' : 'proc'})`,
+                '--al': `var(--${a.severity === 'error' ? 'late' : 'proc'})`,
               } as CSSProperties}
             >
               <span className="aid">{a.id_label}</span>
@@ -275,7 +275,7 @@ function CompactTables({
     route: string,
     inner: ReactNode,
   ) => (
-    <div className="block" style={{ '--bc': `var(${color})` } as CSSProperties}>
+    <div className="block" style={{ '--bc': `var(--${color})` } as CSSProperties}>
       <div className="block-h">
         <span className="bnum">{num}</span>
         <div>

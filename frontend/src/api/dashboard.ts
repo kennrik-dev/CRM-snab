@@ -15,7 +15,7 @@ export type Meter = {
   sub: string | null // text detail (e.g. "34 / 39 поставок")
   amount: number | null // kopecks; rendered via money() when sub is null
   seg: SegBar
-  color: string // bare token, e.g. 'proc' → rendered as var(--proc)
+  color: string // '--'-prefixed token from BE (e.g. '--proc'); FE composes var(--<it>)
 }
 
 export type FlowStage = {
