@@ -1,4 +1,4 @@
-import { type CSSProperties } from 'react'
+import { type CSSProperties, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import {
@@ -7,9 +7,16 @@ import {
   type FlowStage,
   type AttentionItem,
   type FeedItem,
+  type DashboardTables,
+  type AwaitingRow,
+  type ProcurementRow,
+  type SupportRow,
 } from '../api/dashboard'
 import { relTime, targetRoute, feedRoute } from '../lib/dashView'
-import { money } from '../lib/format'
+import { DataTable, type DataTableColumn } from '../components/DataTable'
+import { Chip } from '../components/Chip'
+import { postavkiStatusChip, procStatusChip } from '../lib/statusColors'
+import { money, dateRu } from '../lib/format'
 
 function Meters({ data }: { data: Meter[] }) {
   return (
@@ -154,6 +161,176 @@ function FeedPanel({
   )
 }
 
+function CompactTables({
+  data,
+  onRow,
+  onSection,
+}: {
+  data: DashboardTables
+  onRow: (route: string) => void
+  onSection: (route: string) => void
+}) {
+  const awaitingCols: DataTableColumn<AwaitingRow>[] = [
+    {
+      key: 'title',
+      header: 'Наименование',
+      render: (r) => (
+        <>
+          <span className="parent-tag">{r.code}</span>
+          <span className="zname">{r.title}</span>
+        </>
+      ),
+    },
+    { key: 'mtr', header: 'Тип МТР', render: (r) => r.mtr ?? '—' },
+    { key: 'srok', header: 'Срок', render: (r) => dateRu(r.srok) },
+    { key: 'position_count', header: 'Поз.', align: 'center', width: '10%' },
+    { key: 'status', header: 'Статус', width: '18%' },
+  ]
+
+  const procurementCols: DataTableColumn<ProcurementRow>[] = [
+    {
+      key: 'title',
+      header: 'Наименование',
+      render: (r) => (
+        <>
+          <span className="parent-tag">{r.code}</span>
+          <span className="zname">{r.title}</span>
+        </>
+      ),
+    },
+    { key: 'num', header: '№ заявки', render: (r) => r.num ?? '—' },
+    { key: 'supplier', header: 'Поставщик', render: (r) => r.supplier ?? '—' },
+    { key: 'position_count', header: 'Поз.', align: 'center', width: '10%' },
+    {
+      key: 'status_zakup',
+      header: 'Статус',
+      width: '18%',
+      render: (r) => <Chip {...procStatusChip(r.status_zakup)} mini />,
+    },
+  ]
+
+  const supportCols: DataTableColumn<SupportRow>[] = [
+    {
+      key: 'title',
+      header: 'Наименование',
+      render: (r) => (
+        <>
+          <span className="parent-tag">{r.code}</span>
+          <span className="zname">{r.title}</span>
+        </>
+      ),
+    },
+    { key: 'num', header: '№ заявки', render: (r) => r.num ?? '—' },
+    { key: 'supplier', header: 'Поставщик', render: (r) => r.supplier ?? '—' },
+    {
+      key: 'contract_sum',
+      header: 'Сумма договора',
+      align: 'right',
+      render: (r) => <span className="dt">{money(r.contract_sum)}</span>,
+    },
+    {
+      key: 'status_postavki',
+      header: 'Статус поставки',
+      width: '16%',
+      render: (r) => <Chip {...postavkiStatusChip(r.status_postavki)} mini />,
+    },
+    {
+      key: 'overdue_pct',
+      header: 'Просроч.',
+      align: 'center',
+      width: '10%',
+      render: (r) => {
+        const v = Math.round(r.overdue_pct)
+        const cls = v >= 50 ? 'b' : v > 0 ? 'w' : ''
+        return <span className={`ovd ${cls}`}>{v}%</span>
+      },
+    },
+    {
+      key: 'progress',
+      header: 'Прогресс',
+      align: 'center',
+      width: '14%',
+      render: (r) => {
+        const pct = r.total ? Math.round((r.delivered / r.total) * 100) : 0
+        return (
+          <div className="prog">
+            <div className="bar">
+              <i style={{ width: `${pct}%` }} />
+            </div>
+            <span className="pn">
+              <b>{r.delivered}</b>/{r.total}
+            </span>
+          </div>
+        )
+      },
+    },
+  ]
+
+  const block = (
+    num: string,
+    color: string,
+    title: string,
+    eng: string,
+    total: number,
+    route: string,
+    inner: ReactNode,
+  ) => (
+    <div className="block" style={{ '--bc': `var(${color})` } as CSSProperties}>
+      <div className="block-h">
+        <span className="bnum">{num}</span>
+        <div>
+          <div className="btitle">{title}</div>
+          <div className="beng">{eng}</div>
+        </div>
+        <span className="bcount">{total}</span>
+        <span className="sp" />
+        <button className="blink" onClick={() => onSection(route)}>
+          Открыть раздел →
+        </button>
+      </div>
+      <div className="tbl-scroll">{inner}</div>
+    </div>
+  )
+
+  return (
+    <>
+      <div className="eyebrow" style={{ margin: '6px 0 10px' }}>
+        Заявки по этапам
+      </div>
+      {block('1', 'wait', 'Ожидают закупки', 'Awaiting', data.awaiting.total, '/komplektaciya',
+        <DataTable<AwaitingRow>
+          className="fit"
+          columns={awaitingCols}
+          rows={data.awaiting.items}
+          getRowId={(r) => r.id}
+          onRowClick={(r) => onRow(`/komplektaciya/${r.id}`)}
+          empty={<span className="empty-state">Нет заявок</span>}
+        />,
+      )}
+      {block('2', 'proc', 'В закупке', 'In procurement', data.procurement.total, '/zakupka',
+        <DataTable<ProcurementRow>
+          className="fit"
+          columns={procurementCols}
+          rows={data.procurement.items}
+          getRowId={(r) => r.id}
+          onRowClick={(r) => onRow(`/zakupka/${r.id}`)}
+          empty={<span className="empty-state">Нет процедур</span>}
+        />,
+      )}
+      {block('3', 'supp', 'В сопровождении', 'In support', data.support.total, '/soprovozhdenie',
+        <DataTable<SupportRow>
+          className="fit"
+          columns={supportCols}
+          rows={data.support.items}
+          getRowId={(r) => r.id}
+          onRowClick={(r) => onRow(`/soprovozhdenie/${r.id}`)}
+          empty={<span className="empty-state">Нет процедур</span>}
+        />,
+      )}
+    </>
+  )
+}
+
 export function Dashboard() {
   const navigate = useNavigate()
   const q = useQuery({
@@ -225,7 +402,11 @@ export function Dashboard() {
         />
         <FeedPanel data={d.feed} onOpen={(route) => navigate(route)} />
       </div>
-      {/* Компактные таблицы — Task 5 */}
+      <CompactTables
+        data={d.tables}
+        onRow={(route) => navigate(route)}
+        onSection={(route) => navigate(route)}
+      />
     </div>
   )
 }
