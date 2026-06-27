@@ -212,6 +212,9 @@ _AUDIT_PHRASES = {
     ("procedure", "cancel"): "отменил(а) процедуру",
     ("procedure", "uncancel"): "восстановил(а) процедуру",
     ("procedure", "update"): "обновил(а) процедуру",
+    ("procedure", "positions_add"): "добавил(а) позиции в процедуру",
+    ("procedure", "position_update"): "изменил(а) позицию в процедуре",
+    ("procedure", "position_delete"): "удалил(а) позицию из процедуры",
     ("procedure", "delivery_create"): "создал(а) поставку в процедуре",
     ("procedure", "delivery_delete"): "удалил(а) поставку из процедуры",
     ("procedure", "delivery_update"): "изменил(а) поставку в процедуре",
@@ -370,7 +373,6 @@ def _load_dashboard_ctx(db, today: date):
 
 
 def _dash_meters(ctx) -> list:
-    t = ctx.today
     active_total = ctx.active_total
 
     def ratio(n, d):
@@ -565,7 +567,7 @@ def _dash_feed(db) -> list:
 
 def _dash_tables(db, ctx) -> dict:
     """Compact tables (spec §8): top-10 newest, true total."""
-    from app.models import ParentRequest, ProcedurePosition, RequestedPosition, Tender
+    from app.models import ParentRequest, RequestedPosition, Tender
 
     # --- awaiting (parents: awaiting, no tender) ---
     aw_q = (
