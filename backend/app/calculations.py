@@ -435,13 +435,87 @@ def _dash_flow(ctx) -> list:
     ]
 
 
+def _dash_attention(ctx) -> list:
+    """«Требует внимания» (spec §6): 2 tiers, errors first by days desc, then warnings."""
+    today = ctx.today
+    items = []  # each: (severity_rank, days, item_dict)
+
+    def label(p):
+        code = ctx.parent_map.get(p.id, {}).get("code")
+        if code and p.proc:
+            return f"{code} · {p.proc}"
+        return p.proc or code or "—"
+
+    # 1. overdue / late deliveries (error)
+    for p in ctx.supp_procs:
+        for d in ctx.deliveries_by_proc.get(p.id, []):
+            overdue = is_delivery_overdue(d, p.srok_dd, today)
+            late = is_delivery_late(d, p.srok_dd, today)
+            if not (overdue or late):
+                continue
+            srok = _parse_date(p.srok_dd)
+            if late:
+                ddate = _parse_date(getattr(d, "date", None))
+                days = (ddate - srok).days if (srok and ddate) else 0
+            else:
+                days = (today - srok).days if srok else 0
+            items.append((0, days, {
+                "id_label": label(p),
+                "severity": "error",
+                "text": f"Поставка №{d.n} ({p.supplier or '—'}) — просрочена на {days} дн.",
+                "target": {"kind": "procedure", "id": p.id},
+            }))
+
+    # 2. overdue payments (error)
+    for u in ctx.overdue_upds:
+        srok = _parse_date(getattr(u, "srok", None))
+        days = (today - srok).days if srok else 0
+        items.append((0, days, {
+            "id_label": f"УПД {u.upd}",
+            "severity": "error",
+            "text": f"УПД {u.upd} просрочена к оплате +{days} дн. · {_fmt_money(u.amount or 0)}",
+            "target": {"kind": "payment", "id": u.id},
+        }))
+
+    # 3. missing documents (error) — proc has ≥1 delivery, ttn/m15/upd not received in all
+    for p in ctx.supp_procs:
+        dels = ctx.deliveries_by_proc.get(p.id, [])
+        if not dels:
+            continue
+        agg = docs_aggregate(dels)
+        missing = [name for key, name in _DASH_DOC_NAMES.items() if not agg[key]]
+        if missing:
+            items.append((0, 0, {
+                "id_label": label(p),
+                "severity": "error",
+                "text": "Документы не получены: " + ", ".join(missing),
+                "target": {"kind": "procedure", "id": p.id},
+            }))
+
+    # 4. УПД without certificate (warning) — await delivery-УПД with doc_sert=0
+    for u in ctx.await_upds:
+        if u.delivery_id is None:
+            continue
+        d = next((x for x in ctx.deliveries if x.id == u.delivery_id), None)
+        if d is not None and not bool(getattr(d, "doc_sert", 0)):
+            items.append((1, 0, {
+                "id_label": f"УПД {u.upd}",
+                "severity": "warning",
+                "text": f"УПД {u.upd} без сертификата — оплату можно провести",
+                "target": {"kind": "payment", "id": u.id},
+            }))
+
+    items.sort(key=lambda t: (t[0], -t[1]))
+    return [it for _, _, it in items]
+
+
 def dashboard(db, today: date) -> dict:
     """Дашборд (docs/14, docs/32 §6). Разделы attention/feed/tables — в Задачах 3–5."""
     ctx = _load_dashboard_ctx(db, today)
     return {
         "meters": _dash_meters(ctx),
         "flow": _dash_flow(ctx),
-        "attention": [],                       # Task 3
+        "attention": _dash_attention(ctx),
         "feed": [],                            # Task 4
         "tables": {                            # Task 5
             "awaiting": {"total": 0, "items": []},

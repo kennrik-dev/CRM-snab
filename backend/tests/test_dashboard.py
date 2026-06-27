@@ -288,3 +288,82 @@ def test_flow_four_stages_counts_and_routes(client_admin):
     assert f["support"]["route"] == "/soprovozhdenie"
     assert f["payments"]["count"] == 0
     assert f["payments"]["route"] == "/oplaty"
+
+
+# --- 8.1 Task 3: attention (2-tier) --------------------------------------------
+
+def _attention(client):
+    return client.get("/dashboard").json()["attention"]
+
+
+def test_attention_overdue_delivery_is_error(client_admin, db_seeded):
+    pid, d, _upd = _delivery_upd(client_admin, "A-OD", "od", POS1)
+    _set_proc(db_seeded, pid, srok_dd="2026-06-01")          # past, transit → overdue delivery
+    # the fixture leaves all docs=0 and sert=0, which would also fire a missing-docs
+    # error and a cert warning; mark them received to isolate the overdue-delivery error.
+    _set_delivery(db_seeded, d["id"], doc_ttn=1, doc_m15=1, doc_upd=1, doc_sert=1)
+    items = _attention(client_admin)
+    assert len(items) == 1
+    it = items[0]
+    assert it["severity"] == "error"
+    assert "просрочена" in it["text"]
+    assert it["target"] == {"kind": "procedure", "id": pid}
+
+
+def test_attention_overdue_payment_is_error(client_admin, db_seeded):
+    pid, d, _upd = _delivery_upd(client_admin, "A-OP", "op", POS1)
+    from app.models import UpdPayment
+    db_seeded.query(UpdPayment).filter_by(delivery_id=d["id"]).update({"srok": "2026-06-01"})
+    db_seeded.commit()
+    # the await delivery-УПД has doc_sert=0, which ALSO fires a cert WARNING (payment-targeted);
+    # mark sert received so only the overdue-payment ERROR remains among payment items
+    # (the missing-docs error is procedure-targeted and is filtered out below).
+    _set_delivery(db_seeded, d["id"], doc_sert=1)
+    items = [i for i in _attention(client_admin) if i["target"]["kind"] == "payment"]
+    assert len(items) == 1
+    assert items[0]["severity"] == "error"
+    assert "к оплате" in items[0]["text"]
+
+
+def test_attention_missing_documents_is_error(client_admin, db_seeded):
+    pid, d, _upd = _delivery_upd(client_admin, "A-MD", "md", POS1)
+    # delivery exists, no docs set → ttn/m15/upd all missing
+    items = [i for i in _attention(client_admin) if i["target"] == {"kind": "procedure", "id": pid}]
+    assert any(i["severity"] == "error" and "Документы не получены" in i["text"] for i in items)
+    txt = next(i["text"] for i in items if "Документы не получены" in i["text"])
+    assert "ТТН" in txt and "М-15" in txt and "УПД" in txt
+
+
+def test_attention_no_delivery_no_missing_docs(client_admin):
+    # procedure in support with NO delivery → must NOT trigger missing-docs
+    pid = _to_support(client_admin, "A-ND", "nd", POS1)
+    items = [i for i in _attention(client_admin) if i["target"] == {"kind": "procedure", "id": pid}]
+    assert items == []
+
+
+def test_attention_upd_without_certificate_is_warning(client_admin, db_seeded):
+    pid, d, _upd = _delivery_upd(client_admin, "A-CERT", "cert", POS1)
+    _set_proc(db_seeded, pid, srok_dd="2026-06-30")          # not overdue (future)
+    # mark ТТН/М-15/УПД received (so missing-docs does NOT fire), leave sert=0 (warning)
+    _set_delivery(db_seeded, d["id"], doc_ttn=1, doc_m15=1, doc_upd=1)
+    items = _attention(client_admin)
+    assert len(items) == 1
+    assert items[0]["severity"] == "warning"
+    assert "без сертификата" in items[0]["text"]
+    assert items[0]["target"]["kind"] == "payment"
+
+
+def test_attention_errors_before_warnings(client_admin, db_seeded):
+    # warning: UPD without cert (future srok); mark ttn/m15/upd received so only cert fires
+    p1, d1, _u1 = _delivery_upd(client_admin, "A-MIX1", "mix1", POS1)
+    _set_proc(db_seeded, p1, srok_dd="2026-06-30")
+    _set_delivery(db_seeded, d1["id"], doc_ttn=1, doc_m15=1, doc_upd=1)
+    # error: overdue delivery
+    p2, d2, _u2 = _delivery_upd(client_admin, "A-MIX2", "mix2", POS1)
+    _set_proc(db_seeded, p2, srok_dd="2026-06-01")
+    severities = [i["severity"] for i in _attention(client_admin)]
+    # all errors appear before any warning
+    if "warning" in severities:
+        assert severities.index("warning") > max(
+            idx for idx, s in enumerate(severities) if s == "error"
+        )
