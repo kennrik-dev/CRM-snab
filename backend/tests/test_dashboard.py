@@ -367,3 +367,46 @@ def test_attention_errors_before_warnings(client_admin, db_seeded):
         assert severities.index("warning") > max(
             idx for idx, s in enumerate(severities) if s == "error"
         )
+
+
+# --- 8.1 Task 4: feed (last 20 audit_log) -------------------------------------
+
+def _feed(client):
+    return client.get("/dashboard").json()["feed"]
+
+
+def test_feed_has_recent_actions_with_actor_and_phrase(client_admin):
+    _create_request(client_admin, "F-A1", "feed one", POS1)   # audit: parent/create
+    feed = _feed(client_admin)
+    assert feed, "feed should not be empty"
+    top = feed[0]
+    assert top["actor"]                        # non-empty actor
+    assert top["action_label"]                 # humanized phrase
+    assert top["created_at"]                   # ISO timestamp
+    # the most recent action was creating the request
+    assert "заявку" in top["action_label"]
+    assert top["entity_display"] == "F-A1"
+    assert top["target"] == {"kind": "parent", "id": top["target"]["id"]}
+
+
+def test_feed_newest_first(client_admin):
+    _create_request(client_admin, "F-O1", "older", POS1)
+    _create_request(client_admin, "F-O2", "newer", POS1)
+    feed = _feed(client_admin)
+    displays = [f["entity_display"] for f in feed if f["entity_display"] in ("F-O1", "F-O2")]
+    assert displays[0] == "F-O2"              # newer first
+
+
+def test_feed_payment_pay_phrase_and_target(client_admin):
+    created = client_admin.post("/payments", json={"upd": "UPD-FP", "supplier": "S"}).json()
+    client_admin.post(f"/payments/{created['id']}/pay")
+    feed = _feed(client_admin)
+    pay = next(f for f in feed if "оплату" in f["action_label"])
+    assert pay["entity_display"] == "UPD-FP"
+    assert pay["target"] == {"kind": "payment", "id": created["id"]}
+
+
+def test_feed_capped_at_20(client_admin):
+    for i in range(25):
+        client_admin.post("/payments", json={"upd": f"UPD-CAP-{i}", "supplier": "S"})
+    assert len(_feed(client_admin)) == 20

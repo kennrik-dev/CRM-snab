@@ -509,6 +509,60 @@ def _dash_attention(ctx) -> list:
     return [it for _, _, it in items]
 
 
+def _dash_feed(db) -> list:
+    """«Лента событий» (spec §7): last 20 audit_log, newest first."""
+    from app.models import (
+        AuditLog, ParentRequest, Procedure, UpdPayment, User,
+    )
+
+    rows = (
+        db.query(AuditLog, User.full_name)
+        .outerjoin(User, AuditLog.user_id == User.id)
+        .order_by(AuditLog.created_at.desc(), AuditLog.id.desc())
+        .limit(20)
+        .all()
+    )
+
+    # polymorphic entity display: batch-lookup codes per kind
+    parent_ids = {r[0].entity_id for r in rows if r[0].entity_kind in ("parent", "parent_request")}
+    proc_ids = {r[0].entity_id for r in rows if r[0].entity_kind == "procedure"}
+    upd_ids = {r[0].entity_id for r in rows if r[0].entity_kind == "upd_payment"}
+
+    code_map = {pid: code for pid, code in
+                db.query(ParentRequest.id, ParentRequest.code)
+                .filter(ParentRequest.id.in_(parent_ids)).all()} if parent_ids else {}
+    proc_map = {pid: proc for pid, proc in
+                db.query(Procedure.id, Procedure.proc)
+                .filter(Procedure.id.in_(proc_ids)).all()} if proc_ids else {}
+    upd_map = {uid: upd for uid, upd in
+               db.query(UpdPayment.id, UpdPayment.upd)
+               .filter(UpdPayment.id.in_(upd_ids)).all()} if upd_ids else {}
+
+    _TARGET_KIND = {"parent": "parent", "parent_request": "parent",
+                    "procedure": "procedure", "upd_payment": "payment"}
+
+    out = []
+    for log, full_name in rows:
+        kind = log.entity_kind
+        if kind in ("parent", "parent_request"):
+            display = code_map.get(log.entity_id)
+        elif kind == "procedure":
+            display = proc_map.get(log.entity_id)
+        elif kind == "upd_payment":
+            display = upd_map.get(log.entity_id)
+        else:
+            display = None
+        tk = _TARGET_KIND.get(kind)
+        out.append({
+            "actor": full_name or "Система",
+            "action_label": _AUDIT_PHRASES.get((kind, log.action), log.action),
+            "entity_display": display,
+            "target": {"kind": tk, "id": log.entity_id} if tk else None,
+            "created_at": log.created_at,
+        })
+    return out
+
+
 def dashboard(db, today: date) -> dict:
     """Дашборд (docs/14, docs/32 §6). Разделы attention/feed/tables — в Задачах 3–5."""
     ctx = _load_dashboard_ctx(db, today)
@@ -516,7 +570,7 @@ def dashboard(db, today: date) -> dict:
         "meters": _dash_meters(ctx),
         "flow": _dash_flow(ctx),
         "attention": _dash_attention(ctx),
-        "feed": [],                            # Task 4
+        "feed": _dash_feed(db),
         "tables": {                            # Task 5
             "awaiting": {"total": 0, "items": []},
             "procurement": {"total": 0, "items": []},
