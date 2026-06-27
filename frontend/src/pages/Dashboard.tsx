@@ -72,7 +72,7 @@ function AttentionPanel({
   data: AttentionItem[]
   onOpen: (route: string) => void
 }) {
-  const shown = data.slice(0, 20)
+  const shown = data.slice(0, 12)
   const rest = data.length - shown.length
   return (
     <div className="panel">
@@ -81,34 +81,36 @@ function AttentionPanel({
         <span className="cnt">{data.length}</span>
         <span className="sp" />
       </div>
-      {shown.length === 0 ? (
-        <div className="fitem" style={{ color: 'var(--faint)' }}>
-          Всё под контролем
-        </div>
-      ) : (
-        shown.map((a, i) => {
-          const route = targetRoute(a.target)
-          return (
-            <div
-              key={i}
-              className="alert"
-              style={{
-                '--al': `var(--${a.severity === 'error' ? 'late' : 'proc'})`,
-              } as CSSProperties}
-            >
-              <span className="aid">{a.id_label}</span>
-              <span className="at">{a.text}</span>
-              <button
-                className="ab"
-                disabled={!route}
-                onClick={() => route && onOpen(route)}
+      <div style={{ maxHeight: '294px', overflowY: 'auto' }}>
+        {shown.length === 0 ? (
+          <div className="fitem" style={{ color: 'var(--faint)' }}>
+            Всё под контролем
+          </div>
+        ) : (
+          shown.map((a, i) => {
+            const route = targetRoute(a.target)
+            return (
+              <div
+                key={i}
+                className="alert"
+                style={{
+                  '--al': `var(--${a.severity === 'error' ? 'late' : 'proc'})`,
+                } as CSSProperties}
               >
-                Открыть
-              </button>
-            </div>
-          )
-        })
-      )}
+                <span className="aid">{a.id_label}</span>
+                <span className="at">{a.text}</span>
+                <button
+                  className="ab"
+                  disabled={!route}
+                  onClick={() => route && onOpen(route)}
+                >
+                  Открыть
+                </button>
+              </div>
+            )
+          })
+        )}
+      </div>
       {rest > 0 && (
         <div className="fitem" style={{ color: 'var(--faint)' }}>
           и ещё {rest}
@@ -125,38 +127,41 @@ function FeedPanel({
   data: FeedItem[]
   onOpen: (route: string) => void
 }) {
+  const shown = data.slice(0, 12)
   return (
     <div className="panel">
       <div className="phead">
         <h2>Лента событий</h2>
         <span className="sp" />
       </div>
-      {data.length === 0 ? (
-        <div className="fitem" style={{ color: 'var(--faint)' }}>
-          Пока нет событий
-        </div>
-      ) : (
-        data.map((f, i) => {
-          const route = feedRoute(f.target)
-          return (
-            <div
-              key={i}
-              className="fitem"
-              style={route ? { cursor: 'pointer' } : undefined}
-              onClick={route ? () => onOpen(route) : undefined}
-            >
-              <span className="ft2">{relTime(f.created_at)}</span>
-              <div>
-                <b>{f.actor}</b>{' '}
-                <span>
-                  {f.action_label}
-                  {f.entity_display ? ` ${f.entity_display}` : ''}
-                </span>
+      <div style={{ maxHeight: '240px', overflowY: 'auto' }}>
+        {data.length === 0 ? (
+          <div className="fitem" style={{ color: 'var(--faint)' }}>
+            Пока нет событий
+          </div>
+        ) : (
+          shown.map((f, i) => {
+            const route = feedRoute(f.target)
+            return (
+              <div
+                key={i}
+                className="fitem"
+                style={route ? { cursor: 'pointer' } : undefined}
+                onClick={route ? () => onOpen(route) : undefined}
+              >
+                <span className="ft2">{relTime(f.created_at)}</span>
+                <div>
+                  <b>{f.actor}</b>{' '}
+                  <span>
+                    {f.action_label}
+                    {f.entity_display ? ` ${f.entity_display}` : ''}
+                  </span>
+                </div>
               </div>
-            </div>
-          )
-        })
-      )}
+            )
+          })
+        )}
+      </div>
     </div>
   )
 }
