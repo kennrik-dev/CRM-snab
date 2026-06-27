@@ -184,7 +184,7 @@ function CompactTables({
     { key: 'mtr', header: 'Тип МТР', render: (r) => r.mtr ?? '—' },
     { key: 'srok', header: 'Срок', render: (r) => dateRu(r.srok) },
     { key: 'position_count', header: 'Поз.', align: 'center', width: '10%' },
-    { key: 'status', header: 'Статус', width: '18%' },
+    { key: 'status', header: 'Статус', width: '18%', render: (r) => <Chip kind="wait" label={r.status} mini /> },
   ]
 
   const procurementCols: DataTableColumn<ProcurementRow>[] = [
