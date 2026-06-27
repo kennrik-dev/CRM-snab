@@ -188,6 +188,21 @@ def payments_summary(db, today: date) -> dict:
     }
 
 
+def dashboard(db, today: date) -> dict:
+    """Дашборд (docs/14, docs/32 §6). Stub — real sections land in Tasks 2–5."""
+    return {
+        "meters": [],
+        "flow": [],
+        "attention": [],
+        "feed": [],
+        "tables": {
+            "awaiting": {"total": 0, "items": []},
+            "procurement": {"total": 0, "items": []},
+            "support": {"total": 0, "items": []},
+        },
+    }
+
+
 __all__ = [
     "today_moscow",
     "position_sum",
@@ -200,4 +215,5 @@ __all__ = [
     "docs_aggregate",
     "is_upd_overdue",
     "payments_summary",
+    "dashboard",
 ]
