@@ -587,7 +587,7 @@ def _dash_tables(db, ctx) -> dict:
     } for p in aw_parents]
 
     # --- procurement (block=zakupka, status_zakup != Отменена) ---
-    pr_procs = sorted(ctx.active_zakup, key=lambda p: p.created_at, reverse=True)[:10]
+    pr_procs = sorted(ctx.active_zakup, key=lambda p: (p.created_at, p.id), reverse=True)[:10]
     pr_pos = {pid: len(ctx.positions_by_proc.get(pid, [])) for pid in [p.id for p in pr_procs]}
     procurement_items = [{
         "id": p.id,
@@ -598,7 +598,7 @@ def _dash_tables(db, ctx) -> dict:
     } for p in pr_procs]
 
     # --- support (supp_procs) ---
-    su_procs = sorted(ctx.supp_procs, key=lambda p: p.created_at, reverse=True)[:10]
+    su_procs = sorted(ctx.supp_procs, key=lambda p: (p.created_at, p.id), reverse=True)[:10]
     support_items = []
     for p in su_procs:
         positions = ctx.positions_by_proc.get(p.id, [])
