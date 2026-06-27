@@ -176,3 +176,115 @@ def test_dashboard_ok_for_department_employee(client_seeded, db_seeded):
     u = _make_kompl_emp(db_seeded)
     _login_as(client_seeded, u.email)
     assert client_seeded.get("/dashboard").status_code == 200
+
+
+# --- 8.1 Task 2: meters + flow -------------------------------------------------
+
+POS1 = [{"name": "x", "qty": 2.0, "unit": "шт", "price": 10000}]   # 2 * 100.00 = 20000
+
+
+def _meters(client):
+    return {m["key"]: m for m in client.get("/dashboard").json()["meters"]}
+
+
+def _flow(client):
+    return {s["key"]: s for s in client.get("/dashboard").json()["flow"]}
+
+
+def test_meter_in_zakupka_count(client_admin):
+    _to_zakupka(client_admin, "D-Z1", "z1", POS1)
+    _to_zakupka(client_admin, "D-Z2", "z2", POS1)
+    m = _meters(client_admin)
+    assert m["in_zakupka"]["value"] == 2
+    assert m["in_zakupka"]["sub"] == "процедур"
+    assert m["in_zakupka"]["amount"] is None
+    assert m["in_zakupka"]["seg"]["total"] == 14
+
+
+def test_meter_in_zakupka_excludes_cancelled(client_admin, db_seeded):
+    pid = _to_zakupka(client_admin, "D-ZX", "zx", POS1)
+    # «Отменена» is a service value (PATCH→422) — set it directly on the row.
+    _set_proc(db_seeded, pid, status_zakup="Отменена")
+    assert _meters(client_admin)["in_zakupka"]["value"] == 0
+
+
+def test_meter_in_support_count_and_contract_sum(client_admin, db_seeded):
+    pid = _to_support(client_admin, "D-S1", "s1", POS1)
+    _set_proc(db_seeded, pid, contract_sum=1500000)   # 15 000.00 ₽
+    m = _meters(client_admin)
+    assert m["in_support"]["value"] == 1
+    assert m["in_support"]["amount"] == 1500000
+    assert m["in_support"]["sub"] is None
+
+
+def test_meter_in_support_excludes_completed(client_admin, db_seeded):
+    pid, d, _upd = _delivery_upd(client_admin, "D-SC", "sc", POS1)
+    # mark delivered + pay the УПД → completed
+    _set_delivery(db_seeded, d["id"], status="done", date="2026-06-15")
+    _set_proc(db_seeded, pid, status_postavki="Поставлено", srok_dd="2026-06-30")
+    list_id = client_admin.get("/payments").json()["items"][0]["id"]
+    client_admin.post(f"/payments/{list_id}/pay")
+    # completed → not in operational counters
+    assert _meters(client_admin)["in_support"]["value"] == 0
+
+
+def test_meter_on_time_pct(client_admin, db_seeded):
+    pid, d, _upd = _delivery_upd(client_admin, "D-OT", "ot", POS1)
+    _set_proc(db_seeded, pid, srok_dd="2026-06-30")            # future deadline
+    _set_delivery(db_seeded, d["id"], status="done", date="2026-06-15")  # before srok → on time
+    m = _meters(client_admin)
+    assert m["on_time_pct"]["value"] == 100
+    assert m["on_time_pct"]["unit"] == "%"
+    assert m["on_time_pct"]["sub"] == "1 / 1 поставок"
+
+
+def test_meter_on_time_late_reduces_pct(client_admin, db_seeded):
+    pid, d, _upd = _delivery_upd(client_admin, "D-OT2", "ot2", POS1)
+    _set_proc(db_seeded, pid, srok_dd="2026-06-01")            # past deadline
+    _set_delivery(db_seeded, d["id"], status="done", date="2026-06-15")  # after srok → late
+    assert _meters(client_admin)["on_time_pct"]["value"] == 0  # 0 of 1 on time
+
+
+def test_meter_overdue_count_and_sum(client_admin, db_seeded):
+    pid = _to_support(client_admin, "D-OV", "ov", POS1)
+    # position price 100.00 × 2 = 20000; srok in past, not delivered → overdue
+    _set_proc(db_seeded, pid, srok_dd="2026-06-01", contract_sum=500000)
+    m = _meters(client_admin)
+    assert m["overdue"]["value"] == 1
+    assert m["overdue"]["amount"] == 500000          # contract_sum used
+
+
+def test_meter_upd_await_and_overdue(client_admin, db_seeded):
+    pid, d, _upd = _delivery_upd(client_admin, "D-UA", "ua", POS1)  # await, amount 20000
+    # make it overdue: past srok
+    from app.models import UpdPayment
+    db_seeded.query(UpdPayment).filter_by(delivery_id=d["id"]).update({"srok": "2026-06-01"})
+    db_seeded.commit()
+    m = _meters(client_admin)
+    assert m["upd_await"]["value"] == 1
+    assert m["upd_await"]["amount"] == 20000
+    assert m["upd_overdue"]["value"] == 1
+    assert m["upd_overdue"]["amount"] == 20000
+
+
+def test_meter_upd_excludes_cancelled_procedure(client_admin, db_seeded):
+    pid, d, _upd = _delivery_upd(client_admin, "D-UC", "uc", POS1)
+    _set_proc(db_seeded, pid, status_postavki="Отменена")
+    m = _meters(client_admin)
+    assert m["upd_await"]["value"] == 0
+    assert m["upd_overdue"]["value"] == 0
+
+
+def test_flow_four_stages_counts_and_routes(client_admin):
+    _create_request(client_admin, "D-AW", "aw", POS1)          # awaiting (no tender)
+    _to_zakupka(client_admin, "D-FZ", "fz", POS1)              # in zakupka
+    f = _flow(client_admin)
+    assert set(f.keys()) == {"awaiting", "procurement", "support", "payments"}
+    assert f["awaiting"]["count"] == 1
+    assert f["awaiting"]["route"] == "/komplektaciya"
+    assert f["procurement"]["count"] == 1
+    assert f["procurement"]["route"] == "/zakupka"
+    assert f["support"]["count"] == 0
+    assert f["support"]["route"] == "/soprovozhdenie"
+    assert f["payments"]["count"] == 0
+    assert f["payments"]["route"] == "/oplaty"

@@ -9,7 +9,9 @@ Spec: docs/32-calculations.md §1–5. Decisions: docs/superpowers/plans/2026-06
 """
 from __future__ import annotations
 
+from collections import defaultdict
 from datetime import date, datetime
+from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import or_
@@ -188,14 +190,260 @@ def payments_summary(db, today: date) -> dict:
     }
 
 
+# ---------------------------------------------------------------------------
+# Dashboard (Phase 8.1) — docs/14, docs/32 §6
+# ---------------------------------------------------------------------------
+
+_DASH_DOC_NAMES = {"ttn": "ТТН", "m15": "М-15", "upd": "УПД"}
+
+# (entity_kind, action) -> human phrase; entity_display is appended by the FE.
+_AUDIT_PHRASES = {
+    ("parent", "create"): "создал(а) заявку",
+    ("parent", "update"): "обновил(а) заявку",
+    ("parent", "cancel"): "отменил(а) заявку",
+    ("parent", "uncancel"): "восстановил(а) заявку",
+    ("parent", "duplicate"): "скопировал(а) заявку",
+    ("parent", "positions_add"): "добавил(а) позиции в заявку",
+    ("parent_request", "take_to_work"): "взял(а) в работу заявку",
+    ("position", "position_update"): "изменил(а) позицию",
+    ("position", "position_delete"): "удалил(а) позицию",
+    ("procedure", "split"): "разбил(а) по поставщикам процедуру",
+    ("procedure", "to_support"): "передал(а) в сопровождение процедуру",
+    ("procedure", "cancel"): "отменил(а) процедуру",
+    ("procedure", "uncancel"): "восстановил(а) процедуру",
+    ("procedure", "update"): "обновил(а) процедуру",
+    ("procedure", "delivery_create"): "создал(а) поставку в процедуре",
+    ("procedure", "delivery_delete"): "удалил(а) поставку из процедуры",
+    ("procedure", "delivery_update"): "изменил(а) поставку в процедуре",
+    ("procedure", "upd_create"): "выставил(а) УПД для процедуры",
+    ("procedure", "upd_update"): "обновил(а) УПД для процедуры",
+    ("upd_payment", "payment_create"): "добавил(а) УПД",
+    ("upd_payment", "payment_patch"): "изменил(а) УПД",
+    ("upd_payment", "payment_pay"): "провёл(а) оплату по УПД",
+}
+
+
+def _fmt_money(kopecks: int) -> str:
+    """ru-RU '1 500 ₽' / '1 500,5 ₽' / '12 345,67 ₽' (NBSP thousands, ',' decimal)."""
+    rub = (kopecks or 0) / 100
+    sign = "-" if rub < 0 else ""
+    s = f"{abs(rub):.2f}"
+    int_part, frac = s.split(".")
+    int_part = f"{int(int_part):,}".replace(",", " ")
+    frac = frac.rstrip("0")
+    if frac:
+        return f"{sign}{int_part},{frac} ₽"
+    return f"{sign}{int_part} ₽"
+
+
+def is_procedure_completed(proc, upds) -> bool:
+    """Завершённая процедура (Phase 6 R6): Поставлено AND ≥1 УПД AND all paid."""
+    if getattr(proc, "status_postavki", None) != "Поставлено":
+        return False
+    if not upds:
+        return False
+    return all(getattr(u, "pay_status", None) == "paid" for u in upds)
+
+
+def proc_sum(proc, positions) -> int:
+    """contract_sum если задана, иначе Σ position_sum (коп.)."""
+    cs = getattr(proc, "contract_sum", None)
+    if cs is not None:
+        return int(cs)
+    return procedure_sum(positions)
+
+
+def _seg(ratio: float) -> dict:
+    on = max(0, min(14, round(ratio * 14)))
+    return {"on": on, "total": 14}
+
+
+def _load_dashboard_ctx(db, today: date):
+    """Load + derive everything meters/flow/attention/tables need (compute once)."""
+    from app.models import (
+        Delivery, ParentRequest, Procedure, ProcedurePosition, Tender, UpdPayment,
+    )
+
+    active = or_(
+        Procedure.status_postavki.is_(None),
+        Procedure.status_postavki != "Отменена",
+    )
+
+    procs = db.query(Procedure).all()
+    proc_ids = [p.id for p in procs]
+
+    parent_map: dict = {}
+    if proc_ids:
+        rows = (
+            db.query(Procedure.id, ParentRequest.code, ParentRequest.title)
+            .join(Tender, Procedure.tender_id == Tender.id)
+            .join(ParentRequest, Tender.parent_id == ParentRequest.id)
+            .filter(Procedure.id.in_(proc_ids))
+            .all()
+        )
+        for pid, code, title in rows:
+            parent_map[pid] = {"code": code, "title": title}
+
+    deliveries = (
+        db.query(Delivery).filter(Delivery.procedure_id.in_(proc_ids)).all()
+        if proc_ids else []
+    )
+    positions = (
+        db.query(ProcedurePosition).filter(ProcedurePosition.procedure_id.in_(proc_ids)).all()
+        if proc_ids else []
+    )
+    upds = (
+        db.query(UpdPayment)
+        .join(Delivery, UpdPayment.delivery_id == Delivery.id, isouter=True)
+        .join(Procedure, Delivery.procedure_id == Procedure.id, isouter=True)
+        .filter(active)
+        .all()
+    )
+
+    deliveries_by_proc = defaultdict(list)
+    for d in deliveries:
+        deliveries_by_proc[d.procedure_id].append(d)
+    positions_by_proc = defaultdict(list)
+    for p in positions:
+        positions_by_proc[p.procedure_id].append(p)
+    delivery_proc = {d.id: d.procedure_id for d in deliveries}
+    upds_by_proc = defaultdict(list)
+    for u in upds:
+        pid = delivery_proc.get(u.delivery_id)
+        if pid is not None:
+            upds_by_proc[pid].append(u)
+
+    completed_proc_ids = set()
+    for p in procs:
+        if is_procedure_completed(p, upds_by_proc.get(p.id, [])):
+            completed_proc_ids.add(p.id)
+
+    active_zakup = [
+        p for p in procs
+        if p.block == "zakupka" and p.status_zakup != "Отменена"
+    ]
+    supp_procs = [
+        p for p in procs
+        if p.block == "soprovozhdenie"
+        and p.status_postavki != "Отменена"
+        and p.id not in completed_proc_ids
+    ]
+    active_total = len(active_zakup) + len(supp_procs)
+    overdue_procs = [
+        p for p in supp_procs
+        if is_procedure_overdue(p.srok_dd, p.status_postavki, today)
+    ]
+
+    # on-time deliveries (across active support procs; cancelled procs already
+    # excluded because their deliveries belong to a procedure we still load —
+    # but we only count deliveries of supp_procs to honour 'Отменена excluded').
+    on_time = 0
+    all_deliveries = 0
+    for p in supp_procs:
+        for d in deliveries_by_proc.get(p.id, []):
+            all_deliveries += 1
+            if getattr(d, "status", None) == "done" and not is_delivery_late(d, p.srok_dd, today):
+                on_time += 1
+
+    await_upds = [u for u in upds if u.pay_status == "await"]
+    overdue_upds = [u for u in await_upds if is_upd_overdue(u, today)]
+    all_active_upd = len(upds)
+
+    # awaiting parents (no tender, status='awaiting') — global
+    awaiting_count = (
+        db.query(ParentRequest)
+        .filter(ParentRequest.status == "awaiting")
+        .filter(~db.query(Tender).filter(Tender.parent_id == ParentRequest.id).exists())
+        .count()
+    )
+
+    return SimpleNamespace(
+        today=today, procs=procs, parent_map=parent_map,
+        deliveries=deliveries, deliveries_by_proc=deliveries_by_proc,
+        positions_by_proc=positions_by_proc, upds=upds, upds_by_proc=upds_by_proc,
+        completed_proc_ids=completed_proc_ids, delivery_proc=delivery_proc,
+        active_zakup=active_zakup, supp_procs=supp_procs, active_total=active_total,
+        overdue_procs=overdue_procs, on_time=on_time, all_deliveries=all_deliveries,
+        await_upds=await_upds, overdue_upds=overdue_upds, all_active_upd=all_active_upd,
+        awaiting_count=awaiting_count,
+    )
+
+
+def _dash_meters(ctx) -> list:
+    t = ctx.today
+    active_total = ctx.active_total
+
+    def ratio(n, d):
+        return (n / d) if d else 0.0
+
+    return [
+        {
+            "key": "in_zakupka", "label": "В закупке",
+            "value": len(ctx.active_zakup), "unit": None,
+            "sub": "процедур", "amount": None,
+            "seg": _seg(ratio(len(ctx.active_zakup), active_total)), "color": "--proc",
+        },
+        {
+            "key": "in_support", "label": "В сопровождении",
+            "value": len(ctx.supp_procs), "unit": None,
+            "sub": None,
+            "amount": sum((p.contract_sum or 0) for p in ctx.supp_procs),
+            "seg": _seg(ratio(len(ctx.supp_procs), active_total)), "color": "--supp",
+        },
+        {
+            "key": "on_time_pct", "label": "Поставки в срок",
+            "value": (round(ctx.on_time / ctx.all_deliveries * 100) if ctx.all_deliveries else 0),
+            "unit": "%",
+            "sub": f"{ctx.on_time} / {ctx.all_deliveries} поставок", "amount": None,
+            "seg": _seg(ratio((ctx.on_time / ctx.all_deliveries * 100) if ctx.all_deliveries else 0, 100)),
+            "color": "--ok",
+        },
+        {
+            "key": "overdue", "label": "Просрочено",
+            "value": len(ctx.overdue_procs), "unit": None,
+            "sub": None,
+            "amount": sum(proc_sum(p, ctx.positions_by_proc.get(p.id, [])) for p in ctx.overdue_procs),
+            "seg": _seg(ratio(len(ctx.overdue_procs), active_total)), "color": "--late",
+        },
+        {
+            "key": "upd_await", "label": "УПД в оплате",
+            "value": len(ctx.await_upds), "unit": None,
+            "sub": None,
+            "amount": sum((u.amount or 0) for u in ctx.await_upds),
+            "seg": _seg(ratio(len(ctx.await_upds), ctx.all_active_upd)), "color": "--pay",
+        },
+        {
+            "key": "upd_overdue", "label": "УПД просрочено",
+            "value": len(ctx.overdue_upds), "unit": None,
+            "sub": None,
+            "amount": sum((u.amount or 0) for u in ctx.overdue_upds),
+            "seg": _seg(ratio(len(ctx.overdue_upds), len(ctx.await_upds))), "color": "--late",
+        },
+    ]
+
+
+def _dash_flow(ctx) -> list:
+    return [
+        {"key": "awaiting", "label": "Ожидают закупки", "count": ctx.awaiting_count,
+         "sub": None, "route": "/komplektaciya", "color": "--wait"},
+        {"key": "procurement", "label": "В закупке", "count": len(ctx.active_zakup),
+         "sub": None, "route": "/zakupka", "color": "--proc"},
+        {"key": "support", "label": "В сопровождении", "count": len(ctx.supp_procs),
+         "sub": None, "route": "/soprovozhdenie", "color": "--supp"},
+        {"key": "payments", "label": "Оплаты", "count": len(ctx.await_upds),
+         "sub": None, "route": "/oplaty", "color": "--pay"},
+    ]
+
+
 def dashboard(db, today: date) -> dict:
-    """Дашборд (docs/14, docs/32 §6). Stub — real sections land in Tasks 2–5."""
+    """Дашборд (docs/14, docs/32 §6). Разделы attention/feed/tables — в Задачах 3–5."""
+    ctx = _load_dashboard_ctx(db, today)
     return {
-        "meters": [],
-        "flow": [],
-        "attention": [],
-        "feed": [],
-        "tables": {
+        "meters": _dash_meters(ctx),
+        "flow": _dash_flow(ctx),
+        "attention": [],                       # Task 3
+        "feed": [],                            # Task 4
+        "tables": {                            # Task 5
             "awaiting": {"total": 0, "items": []},
             "procurement": {"total": 0, "items": []},
             "support": {"total": 0, "items": []},
@@ -216,4 +464,6 @@ __all__ = [
     "is_upd_overdue",
     "payments_summary",
     "dashboard",
+    "is_procedure_completed",
+    "proc_sum",
 ]
