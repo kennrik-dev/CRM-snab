@@ -10,6 +10,7 @@ import {
 } from '../api/payments'
 import { Chip } from '../components/Chip'
 import { EmptyState } from '../components/EmptyState'
+import { Modal } from '../components/Modal'
 import { payStatusChip } from '../lib/statusColors'
 import { money, dateRu } from '../lib/format'
 import { kopecksToRublesInput, rublesToKopecks } from '../lib/money'
@@ -86,6 +87,7 @@ export function PaymentCard() {
   const [draft, setDraft] = useState<PayDraft | null>(null)
   const [savedTick, setSavedTick] = useState(0)
   const [actionErr, setActionErr] = useState<string | null>(null)
+  const [confirmPay, setConfirmPay] = useState(false)
 
   // reset draft on payment change / load
   useEffect(() => {
@@ -116,6 +118,7 @@ export function PaymentCard() {
     onSuccess: async () => {
       await refresh()
       setSavedTick((t) => t + 1)
+      setConfirmPay(false)
     },
     onError: (err) => setActionErr(lastErrorMessage(err)),
   })
@@ -235,10 +238,7 @@ export function PaymentCard() {
                 className="btn primary"
                 disabled={isPaid || payMut.isPending}
                 onClick={() => {
-                  if (isPaid || payMut.isPending) return
-                  if (window.confirm('Провести оплату? Дата оплаты будет зафиксирована.')) {
-                    payMut.mutate()
-                  }
+                  if (!isPaid && !payMut.isPending) setConfirmPay(true)
                 }}
               >
                 {payMut.isPending ? 'Оплата…' : 'Провести оплату'}
@@ -300,6 +300,31 @@ export function PaymentCard() {
           </div>
         </div>
       </div>
+
+      <Modal
+        open={confirmPay}
+        onClose={() => setConfirmPay(false)}
+        title="Провести оплату"
+        width={460}
+        footer={
+          <>
+            <button className="btn" onClick={() => setConfirmPay(false)} disabled={payMut.isPending}>
+              Отмена
+            </button>
+            <button
+              className="btn primary"
+              onClick={() => payMut.mutate()}
+              disabled={payMut.isPending}
+            >
+              {payMut.isPending ? 'Оплата…' : 'Провести'}
+            </button>
+          </>
+        }
+      >
+        <div style={{ fontSize: 13, color: 'var(--muted)' }}>
+          Провести оплату? Дата оплаты будет зафиксирована сегодня, действие необратимо.
+        </div>
+      </Modal>
     </div>
   )
 }
