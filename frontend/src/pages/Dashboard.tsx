@@ -1,7 +1,14 @@
 import { type CSSProperties } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { getDashboard, type Meter, type FlowStage } from '../api/dashboard'
+import {
+  getDashboard,
+  type Meter,
+  type FlowStage,
+  type AttentionItem,
+  type FeedItem,
+} from '../api/dashboard'
+import { relTime, targetRoute, feedRoute } from '../lib/dashView'
 import { money } from '../lib/format'
 
 function Meters({ data }: { data: Meter[] }) {
@@ -47,6 +54,102 @@ function FlowRail({ data, onGo }: { data: FlowStage[]; onGo: (route: string) => 
           <div className="fs">{s.sub ?? ' '}</div>
         </div>
       ))}
+    </div>
+  )
+}
+
+function AttentionPanel({
+  data,
+  onOpen,
+}: {
+  data: AttentionItem[]
+  onOpen: (route: string) => void
+}) {
+  const shown = data.slice(0, 20)
+  const rest = data.length - shown.length
+  return (
+    <div className="panel">
+      <div className="phead">
+        <h2>Требует внимания</h2>
+        <span className="cnt">{data.length}</span>
+        <span className="sp" />
+      </div>
+      {shown.length === 0 ? (
+        <div className="fitem" style={{ color: 'var(--faint)' }}>
+          Всё под контролем
+        </div>
+      ) : (
+        shown.map((a, i) => {
+          const route = targetRoute(a.target)
+          return (
+            <div
+              key={i}
+              className="alert"
+              style={{
+                '--al': `var(${a.severity === 'error' ? 'late' : 'proc'})`,
+              } as CSSProperties}
+            >
+              <span className="aid">{a.id_label}</span>
+              <span className="at">{a.text}</span>
+              <button
+                className="ab"
+                disabled={!route}
+                onClick={() => route && onOpen(route)}
+              >
+                Открыть
+              </button>
+            </div>
+          )
+        })
+      )}
+      {rest > 0 && (
+        <div className="fitem" style={{ color: 'var(--faint)' }}>
+          и ещё {rest}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function FeedPanel({
+  data,
+  onOpen,
+}: {
+  data: FeedItem[]
+  onOpen: (route: string) => void
+}) {
+  return (
+    <div className="panel">
+      <div className="phead">
+        <h2>Лента событий</h2>
+        <span className="sp" />
+      </div>
+      {data.length === 0 ? (
+        <div className="fitem" style={{ color: 'var(--faint)' }}>
+          Пока нет событий
+        </div>
+      ) : (
+        data.map((f, i) => {
+          const route = feedRoute(f.target)
+          return (
+            <div
+              key={i}
+              className="fitem"
+              style={route ? { cursor: 'pointer' } : undefined}
+              onClick={route ? () => onOpen(route) : undefined}
+            >
+              <span className="ft2">{relTime(f.created_at)}</span>
+              <div>
+                <b>{f.actor}</b>{' '}
+                <span>
+                  {f.action_label}
+                  {f.entity_display ? ` ${f.entity_display}` : ''}
+                </span>
+              </div>
+            </div>
+          )
+        })
+      )}
     </div>
   )
 }
@@ -115,7 +218,13 @@ export function Dashboard() {
       </div>
       <FlowRail data={d.flow} onGo={(route) => navigate(route)} />
 
-      {/* Требует внимания / Лента событий — Task 4 */}
+      <div className="grid2">
+        <AttentionPanel
+          data={d.attention}
+          onOpen={(route) => navigate(route)}
+        />
+        <FeedPanel data={d.feed} onOpen={(route) => navigate(route)} />
+      </div>
       {/* Компактные таблицы — Task 5 */}
     </div>
   )
