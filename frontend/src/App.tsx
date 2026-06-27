@@ -6,6 +6,7 @@ import { AuthProvider, useAuth } from './auth/AuthContext'
 import { Login } from './auth/Login'
 import { ChangePassword } from './auth/ChangePassword'
 import { RequireAuth, RequireAuthOrChange, RequireNoAuth } from './auth/Guards'
+import { Dashboard } from './pages/Dashboard'
 import { Komplektaciya } from './pages/Komplektaciya'
 import { Zakupka } from './pages/Zakupka'
 import { Soprovozhdenie } from './pages/Soprovozhdenie'
@@ -32,7 +33,7 @@ function AppShell() {
       <Tabs />
       <Routes>
         <Route path="/" element={<Navigate to="/dashboard" replace />} />
-        <Route path="/dashboard" element={<PlaceholderPage title="Дашборд" />} />
+        <Route path="/dashboard" element={<Dashboard />} />
         <Route path="/komplektaciya" element={<Komplektaciya />} />
         <Route path="/komplektaciya/:id" element={<RequestCard />} />
         <Route path="/zakupka" element={<Zakupka />} />
