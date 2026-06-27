@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { listRequests } from '../api/requests'
 import { listProcurements } from '../api/procedures'
 import { listSupport } from '../api/support'
+import { listPayments } from '../api/payments'
 
 type TabDef = { to: string; label: string; showCounter?: boolean }
 
@@ -16,12 +17,12 @@ const TABS: TabDef[] = [
 ]
 
 // Counter queries fetch page_size=1 so the backend only sends the `total`
-// count and no payload rows.
-// Other tabs (oplaty) remain placeholders — still renders `—` until its
-// endpoint is wired up.
+// count and no payload rows. The «Оплаты» counter = unpaid УПД
+// (hide_paid=true → total is the await count).
 const KOMPL_COUNTER_KEY = ['requests', { tabCounter: true }] as const
 const ZAKUP_COUNTER_KEY = ['procurements', { tabCounter: true }] as const
 const SOPP_COUNTER_KEY = ['support', { tabCounter: true }] as const
+const OPLAT_COUNTER_KEY = ['payments', { tabCounter: true }] as const
 
 export function Tabs() {
   const kompl = useQuery({
@@ -36,9 +37,14 @@ export function Tabs() {
     queryKey: SOPP_COUNTER_KEY,
     queryFn: () => listSupport({ page_size: 1 }),
   })
+  const oplat = useQuery({
+    queryKey: OPLAT_COUNTER_KEY,
+    queryFn: () => listPayments({ hide_paid: true, page_size: 1 }),
+  })
   const komplTotal = kompl.data?.total
   const zakupTotal = zakup.data?.total
   const soppTotal = sopp.data?.total
+  const oplatTotal = oplat.data?.total
 
   return (
     <div className="tabs">
@@ -50,9 +56,11 @@ export function Tabs() {
               ? (zakupTotal ?? '—')
               : t.to === '/soprovozhdenie'
                 ? (soppTotal ?? '—')
-                : t.showCounter
-                  ? '—'
-                  : null
+                : t.to === '/oplaty'
+                  ? (oplatTotal ?? '—')
+                  : t.showCounter
+                    ? '—'
+                    : null
         return (
           <NavLink
             key={t.to}
