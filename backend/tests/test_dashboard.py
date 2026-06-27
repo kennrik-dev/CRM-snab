@@ -410,3 +410,59 @@ def test_feed_capped_at_20(client_admin):
     for i in range(25):
         client_admin.post("/payments", json={"upd": f"UPD-CAP-{i}", "supplier": "S"})
     assert len(_feed(client_admin)) == 20
+
+
+# --- 8.1 Task 5: compact tables -----------------------------------------------
+
+def _tables(client):
+    return client.get("/dashboard").json()["tables"]
+
+
+def test_table_awaiting(client_admin):
+    _create_request(client_admin, "T-AW", "awaiting row", POS1)
+    aw = _tables(client_admin)["awaiting"]
+    assert aw["total"] == 1
+    row = aw["items"][0]
+    assert row["code"] == "T-AW"
+    assert row["title"] == "awaiting row"
+    assert row["position_count"] == 1
+    assert row["status"] == "Ожидает"
+
+
+def test_table_procurement(client_admin):
+    pid = _to_zakupka(client_admin, "T-PR", "proc row", POS1)
+    pr = _tables(client_admin)["procurement"]
+    assert pr["total"] == 1
+    row = pr["items"][0]
+    assert row["id"] == pid
+    assert row["code"] == "T-PR"
+    assert row["position_count"] == 1
+
+
+def test_table_support_contract_sum_progress(client_admin, db_seeded):
+    pid, d, _upd = _delivery_upd(client_admin, "T-SU", "supp row", POS1)
+    _set_proc(db_seeded, pid, contract_sum=750000)
+    _set_delivery(db_seeded, d["id"], status="done", date="2026-06-15")
+    su = _tables(client_admin)["support"]
+    assert su["total"] == 1
+    row = su["items"][0]
+    assert row["id"] == pid
+    assert row["contract_sum"] == 750000
+    assert row["delivered"] == 1 and row["total"] == 1     # 1 of 1 positions delivered
+
+
+def test_table_support_excludes_completed_and_cancelled(client_admin, db_seeded):
+    pid, d, _upd = _delivery_upd(client_admin, "T-SC", "supp cx", POS1)
+    _set_delivery(db_seeded, d["id"], status="done", date="2026-06-15")
+    _set_proc(db_seeded, pid, status_postavki="Отменена")
+    assert _tables(client_admin)["support"]["total"] == 0
+
+
+def test_table_items_capped_at_10_total_true(client_admin):
+    for i in range(12):
+        _create_request(client_admin, f"T-CAP-{i:02d}", "cap", POS1)
+    aw = _tables(client_admin)["awaiting"]
+    assert aw["total"] == 12
+    assert len(aw["items"]) == 10
+    # newest first → T-CAP-11 is the first item
+    assert aw["items"][0]["code"] == "T-CAP-11"

@@ -14,7 +14,7 @@ from datetime import date, datetime
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 
 MOSCOW = ZoneInfo("Europe/Moscow")
 
@@ -563,6 +563,63 @@ def _dash_feed(db) -> list:
     return out
 
 
+def _dash_tables(db, ctx) -> dict:
+    """Compact tables (spec §8): top-10 newest, true total."""
+    from app.models import ParentRequest, ProcedurePosition, RequestedPosition, Tender
+
+    # --- awaiting (parents: awaiting, no tender) ---
+    aw_q = (
+        db.query(ParentRequest)
+        .filter(ParentRequest.status == "awaiting")
+        .filter(~db.query(Tender).filter(Tender.parent_id == ParentRequest.id).exists())
+    )
+    aw_total = aw_q.count()
+    aw_parents = aw_q.order_by(ParentRequest.created_at.desc(), ParentRequest.id.desc()).limit(10).all()
+    aw_pos = {pid: c for pid, c in
+              db.query(RequestedPosition.parent_id, func.count(RequestedPosition.id))
+              .filter(RequestedPosition.parent_id.in_([p.id for p in aw_parents] or [0]))
+              .group_by(RequestedPosition.parent_id).all()}
+    awaiting_items = [{
+        "id": p.id, "code": p.code, "title": p.title, "mtr": p.mtr, "srok": p.srok,
+        "position_count": aw_pos.get(p.id, 0), "status": "Ожидает",
+    } for p in aw_parents]
+
+    # --- procurement (block=zakupka, status_zakup != Отменена) ---
+    pr_procs = sorted(ctx.active_zakup, key=lambda p: p.created_at, reverse=True)[:10]
+    pr_pos = {pid: len(ctx.positions_by_proc.get(pid, [])) for pid in [p.id for p in pr_procs]}
+    procurement_items = [{
+        "id": p.id,
+        "code": ctx.parent_map.get(p.id, {}).get("code"),
+        "title": ctx.parent_map.get(p.id, {}).get("title"),
+        "num": p.proc, "supplier": p.supplier,
+        "position_count": pr_pos.get(p.id, 0), "status_zakup": p.status_zakup,
+    } for p in pr_procs]
+
+    # --- support (supp_procs) ---
+    su_procs = sorted(ctx.supp_procs, key=lambda p: p.created_at, reverse=True)[:10]
+    support_items = []
+    for p in su_procs:
+        positions = ctx.positions_by_proc.get(p.id, [])
+        deliveries = ctx.deliveries_by_proc.get(p.id, [])
+        delivered, total, _pct = progress(positions, deliveries)
+        support_items.append({
+            "id": p.id,
+            "code": ctx.parent_map.get(p.id, {}).get("code"),
+            "title": ctx.parent_map.get(p.id, {}).get("title"),
+            "num": p.proc, "supplier": p.supplier,
+            "contract_sum": proc_sum(p, positions),
+            "status_postavki": p.status_postavki,
+            "overdue_pct": overdue_pct(positions, deliveries, p.srok_dd, ctx.today),
+            "delivered": delivered, "total": total,
+        })
+
+    return {
+        "awaiting": {"total": aw_total, "items": awaiting_items},
+        "procurement": {"total": len(ctx.active_zakup), "items": procurement_items},
+        "support": {"total": len(ctx.supp_procs), "items": support_items},
+    }
+
+
 def dashboard(db, today: date) -> dict:
     """Дашборд (docs/14, docs/32 §6). Разделы attention/feed/tables — в Задачах 3–5."""
     ctx = _load_dashboard_ctx(db, today)
@@ -571,11 +628,7 @@ def dashboard(db, today: date) -> dict:
         "flow": _dash_flow(ctx),
         "attention": _dash_attention(ctx),
         "feed": _dash_feed(db),
-        "tables": {                            # Task 5
-            "awaiting": {"total": 0, "items": []},
-            "procurement": {"total": 0, "items": []},
-            "support": {"total": 0, "items": []},
-        },
+        "tables": _dash_tables(db, ctx),
     }
 
 
