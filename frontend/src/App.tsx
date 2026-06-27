@@ -13,6 +13,7 @@ import { Oplaty } from './pages/Oplaty'
 import { RequestCard } from './cards/RequestCard'
 import { ProcedureCard } from './cards/ProcedureCard'
 import { SupportCard } from './cards/SupportCard'
+import { PaymentCard } from './cards/PaymentCard'
 
 function PlaceholderPage({ title }: { title: string }) {
   return (
@@ -39,6 +40,7 @@ function AppShell() {
         <Route path="/soprovozhdenie" element={<Soprovozhdenie />} />
         <Route path="/soprovozhdenie/:id" element={<SupportCard />} />
         <Route path="/oplaty" element={<Oplaty />} />
+        <Route path="/oplaty/:id" element={<PaymentCard />} />
         <Route path="/otchety" element={<PlaceholderPage title="Отчёты" />} />
       </Routes>
     </>
