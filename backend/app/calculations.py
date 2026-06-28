@@ -659,10 +659,109 @@ def dashboard(db, today: date) -> dict:
 # Reports (Phase 9.1) — docs/15, docs/32 §8
 # ---------------------------------------------------------------------------
 
+# --- shared cell/snapshot helpers (Phase 9.1) ----------------------------------
+
+def _claim(code, title):
+    return {"kind": "claim", "code": code or "—", "title": title or ""}
+
+
+def _stage(text, color):
+    return {"kind": "stage", "text": text, "color": color}
+
+
+def _stage_for_block(block):
+    if block == "zakupka":
+        return _stage("В закупке", "--proc")
+    if block == "soprovozhdenie":
+        return _stage("В сопровождении", "--supp")
+    return _stage("—", "--muted")
+
+
+def _days(n: int):
+    level = "bad" if n >= 14 else "warn" if n >= 10 else ""
+    return {"kind": "days", "text": f"{n} дн.", "level": level}
+
+
+def _money(kopecks):
+    return {"kind": "money", "text": _fmt_money(kopecks)}
+
+
+def _pct(value):
+    return {"kind": "percent", "text": f"{round(value)}%"}
+
+
+def _date_late(iso):
+    return {"kind": "date-late", "text": _fmt_date(iso) or "—"}
+
+
+def _kpi(label, value, color=None):
+    return {"label": label, "value": value, "color": color}
+
+
+def _snapshot(report_type, title, ctx, kpis, sections):
+    return {
+        "type": report_type, "title": title,
+        "period": ctx.period_info, "kpis": kpis, "sections": sections,
+    }
+
+
 def report_time(db, today: date, flt: dict) -> dict:
-    """Время на этапе / зависания. Stub — real in Task 3."""
-    return {"type": "time", "title": "Время на этапе и зависания",
-            "period": None, "kpis": [], "sections": []}
+    """Время на этапе / зависания (spec R4/R8)."""
+    ctx = _load_report_ctx(db, today, flt)
+    today = ctx.today
+    rows = []
+    # active procedures (not completed, not Отменена, has block_entered_at)
+    for p in ctx.procs:
+        if p.id in ctx.completed_proc_ids:
+            continue
+        if p.status_zakup == "Отменена" or p.status_postavki == "Отменена":
+            continue
+        bea = _parse_date(p.block_entered_at)
+        if bea is None:
+            continue
+        days = (today - bea).days
+        par = ctx.parent_by_proc.get(p.id, {})
+        rows.append({
+            "claim": _claim(par.get("code"), par.get("title")),
+            "num": p.proc or "—",
+            "supplier": p.supplier or "—",
+            "stage": _stage_for_block(p.block),
+            "days": _days(days),
+            "srok": _fmt_date(p.srok_dd) or "—",
+            "_days": days,
+        })
+    # awaiting parents stuck in Комплектация
+    for par in ctx.awaiting_parents:
+        zg = _parse_date(par.zagruzka)
+        days = (today - zg).days if zg else 0
+        rows.append({
+            "claim": _claim(par.code, par.title),
+            "num": "—",
+            "supplier": "—",
+            "stage": _stage("Комплектация", "--wait"),
+            "days": _days(days),
+            "srok": _fmt_date(par.srok) or "—",
+            "_days": days,
+        })
+    rows.sort(key=lambda r: r["_days"], reverse=True)
+    stuck = sum(1 for r in rows if r["_days"] >= 3)
+    avg = round(sum(r["_days"] for r in rows) / len(rows)) if rows else 0
+    kpis = [
+        _kpi("Заявок в работе", str(len(rows))),
+        _kpi("Зависли ≥3 дн.", str(stuck), "--late"),
+        _kpi("Ср. время на этапе", f"{avg} дн."),
+    ]
+    columns = [
+        {"key": "claim", "label": "Заявка", "kind": "claim", "align": "left"},
+        {"key": "num", "label": "№", "kind": "mono", "align": "left"},
+        {"key": "supplier", "label": "Поставщик", "kind": "text", "align": "left"},
+        {"key": "stage", "label": "Этап", "kind": "stage", "align": "left"},
+        {"key": "days", "label": "Дней на этапе", "kind": "days", "align": "right"},
+        {"key": "srok", "label": "Срок поставки", "kind": "date", "align": "left"},
+    ]
+    rendered = [[r["claim"], r["num"], r["supplier"], r["stage"], r["days"], r["srok"]] for r in rows]
+    section = {"title": None, "columns": columns, "rows": rendered, "footer": None}
+    return _snapshot("time", "Время на этапе и зависания", ctx, kpis, [section])
 
 
 def report_sums(db, today: date, flt: dict) -> dict:

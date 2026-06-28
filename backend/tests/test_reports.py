@@ -291,3 +291,70 @@ def test_filters_endpoint_forbidden_employee(client_seeded, db_seeded):
     u = _make_role_user(db_seeded, "k2@crm.local", "Комплектация")
     _login_as(client_seeded, u.email)
     assert client_seeded.get("/reports").status_code == 403
+
+
+# --- 9.1 Task 3: report_time ---------------------------------------------------
+
+def _report(client, type_="time", **q):
+    qs = "&".join(f"{k}={v}" for k, v in q.items())
+    return client.get(f"/reports/{type_}" + (f"?{qs}" if qs else "")).json()
+
+
+def test_time_includes_procedure_with_days(client_admin, db_seeded):
+    pid = _to_zakupka(client_admin, "T-Z1", "z1", POS)
+    _set_proc(db_seeded, pid, block_entered_at=days_ago(12))
+    snap = _report(client_admin, "time")
+    rows = snap["sections"][0]["rows"]
+    assert any(r[0].get("code") == "T-Z1" for r in rows)
+    day_cell = next(r[4] for r in rows if r[0].get("code") == "T-Z1")
+    assert day_cell["text"] == "12 дн." and day_cell["level"] == "warn"
+    kpi = {k["label"]: k["value"] for k in snap["kpis"]}
+    assert kpi["Заявок в работе"] == "1"
+    assert kpi["Зависли ≥3 дн."] == "1"
+
+
+def test_time_excludes_completed_procedure(client_admin, db_seeded):
+    pid, d, _upd = _delivery_upd(client_admin, "T-CM", "cm", POS)
+    _set_delivery(db_seeded, d["id"], status="done", date=days_ago(1))
+    _set_proc(db_seeded, pid, status_postavki="Поставлено", srok_dd=days_ago(-30), block_entered_at=days_ago(5))
+    pay_id = client_admin.get("/payments").json()["items"][0]["id"]
+    client_admin.post(f"/payments/{pay_id}/pay")            # → completed
+    rows = _report(client_admin, "time")["sections"][0]["rows"]
+    assert not any(r[0].get("code") == "T-CM" for r in rows)
+
+
+def test_time_excludes_cancelled(client_admin, db_seeded):
+    pid = _to_zakupka(client_admin, "T-CA", "ca", POS)
+    _set_proc(db_seeded, pid, status_zakup="Отменена", block_entered_at=days_ago(2))
+    rows = _report(client_admin, "time")["sections"][0]["rows"]
+    assert not any(r[0].get("code") == "T-CA" for r in rows)
+
+
+def test_time_includes_awaiting_parent_komplektaciya(client_admin):
+    _create_request(client_admin, "T-AW", "awaiting", POS)   # no tender → awaiting
+    rows = _report(client_admin, "time")["sections"][0]["rows"]
+    aw = [r for r in rows if r[0].get("code") == "T-AW"]
+    assert aw and aw[0][3]["text"] == "Комплектация"          # stage cell
+
+
+def test_time_avg_and_sort_desc(client_admin, db_seeded):
+    p1 = _to_zakupka(client_admin, "T-A1", "a1", POS); _set_proc(db_seeded, p1, block_entered_at=days_ago(2))
+    p2 = _to_zakupka(client_admin, "T-A2", "a2", POS); _set_proc(db_seeded, p2, block_entered_at=days_ago(8))
+    snap = _report(client_admin, "time")
+    days_list = [r[4]["text"] for r in snap["sections"][0]["rows"]]
+    assert days_list[0] == "8 дн."                            # desc
+    kpi = {k["label"]: k["value"] for k in snap["kpis"]}
+    assert kpi["Ср. время на этапе"] == "5 дн."               # (8+2)/2
+
+
+def test_time_no_block_entered_at_excluded(client_admin, db_seeded):
+    pid = _to_zakupka(client_admin, "T-NB", "nb", POS)
+    _set_proc(db_seeded, pid, block_entered_at=None)
+    rows = _report(client_admin, "time")["sections"][0]["rows"]
+    assert not any(r[0].get("code") == "T-NB" for r in rows)
+
+
+def test_time_period_echo(client_admin):
+    body = client_admin.get("/reports/time?period=month").json()
+    assert body["period"]["key"] == "month"
+    assert body["period"]["label"] == "Текущий месяц"
