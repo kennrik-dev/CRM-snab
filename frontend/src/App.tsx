@@ -11,20 +11,11 @@ import { Komplektaciya } from './pages/Komplektaciya'
 import { Zakupka } from './pages/Zakupka'
 import { Soprovozhdenie } from './pages/Soprovozhdenie'
 import { Oplaty } from './pages/Oplaty'
+import { Otchety } from './pages/Otchety'
 import { RequestCard } from './cards/RequestCard'
 import { ProcedureCard } from './cards/ProcedureCard'
 import { SupportCard } from './cards/SupportCard'
 import { PaymentCard } from './cards/PaymentCard'
-
-function PlaceholderPage({ title }: { title: string }) {
-  return (
-    <div className="wrap">
-      <div className="page-h">
-        <h1>{title}</h1>
-      </div>
-    </div>
-  )
-}
 
 function AppShell() {
   return (
@@ -42,7 +33,7 @@ function AppShell() {
         <Route path="/soprovozhdenie/:id" element={<SupportCard />} />
         <Route path="/oplaty" element={<Oplaty />} />
         <Route path="/oplaty/:id" element={<PaymentCard />} />
-        <Route path="/otchety" element={<PlaceholderPage title="Отчёты" />} />
+        <Route path="/otchety" element={<Otchety />} />
       </Routes>
     </>
   )
