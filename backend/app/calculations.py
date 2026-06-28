@@ -765,9 +765,56 @@ def report_time(db, today: date, flt: dict) -> dict:
 
 
 def report_sums(db, today: date, flt: dict) -> dict:
-    """Суммы по этапам и поставщикам. Stub — real in Task 4."""
-    return {"type": "sums", "title": "Суммы по этапам и поставщикам",
-            "period": None, "kpis": [], "sections": []}
+    """Суммы по этапам и поставщикам (spec R5/R8). Completed included."""
+    ctx = _load_report_ctx(db, today, flt)
+    stage = {"zakupka": [0, 0], "soprovozhdenie": [0, 0]}  # [count, sum_kop]
+    by_supp: dict = {}
+    total = 0
+    for p in ctx.procs:
+        if p.status_zakup == "Отменена" or p.status_postavki == "Отменена":
+            continue
+        s = proc_sum(p, ctx.positions_by_proc.get(p.id, []))
+        if p.block in stage:
+            stage[p.block][0] += 1
+            stage[p.block][1] += s
+        total += s
+        if p.supplier:
+            by_supp.setdefault(p.supplier, [0, 0])
+            by_supp[p.supplier][0] += 1
+            by_supp[p.supplier][1] += s
+    pay_total = sum((u.amount or 0) for u in ctx.upds if u.pay_status == "await")
+    kpis = [
+        _kpi("Всего по договорам", _fmt_money(total)),
+        _kpi("В сопровождении", _fmt_money(stage["soprovozhdenie"][1]), "--supp"),
+        _kpi("В оплате", _fmt_money(pay_total), "--pay"),
+    ]
+    cols1 = [
+        {"key": "stage", "label": "Этап", "kind": "stage", "align": "left"},
+        {"key": "n", "label": "Заявок", "kind": "num", "align": "right"},
+        {"key": "sum", "label": "Сумма договоров", "kind": "money", "align": "right"},
+    ]
+
+    def stage_row(block, label, color):
+        c, s = stage[block]
+        return [_stage(label, color), str(c), _money(s)]
+
+    rows1 = [
+        stage_row("zakupka", "В закупке", "--proc"),
+        stage_row("soprovozhdenie", "В сопровождении", "--supp"),
+    ]
+    footer1 = ["Итого", str(stage["zakupka"][0] + stage["soprovozhdenie"][0]), _money(total)]
+    sec1 = {"title": None, "columns": cols1, "rows": rows1, "footer": footer1}
+
+    cols2 = [
+        {"key": "sup", "label": "Поставщик", "kind": "text", "align": "left"},
+        {"key": "n", "label": "Кол-во", "kind": "num", "align": "right"},
+        {"key": "sum", "label": "Сумма", "kind": "money", "align": "right"},
+    ]
+    rows2 = [[sup, str(c), _money(s)]
+             for sup, (c, s) in sorted(by_supp.items(), key=lambda kv: kv[1][1], reverse=True)]
+    sec2 = {"title": "По поставщикам", "columns": cols2, "rows": rows2, "footer": None}
+
+    return _snapshot("sums", "Суммы по этапам и поставщикам", ctx, kpis, [sec1, sec2])
 
 
 def report_late(db, today: date, flt: dict) -> dict:

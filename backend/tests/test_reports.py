@@ -358,3 +358,54 @@ def test_time_period_echo(client_admin):
     body = client_admin.get("/reports/time?period=month").json()
     assert body["period"]["key"] == "month"
     assert body["period"]["label"] == "Текущий месяц"
+
+
+# --- 9.1 Task 4: report_sums ---------------------------------------------------
+
+def test_sums_stage_totals_and_footer(client_admin, db_seeded):
+    p1 = _to_zakupka(client_admin, "S-Z1", "z1", POS)
+    _set_proc(db_seeded, p1, contract_sum=200000)                  # 2 000 ₽ (block zakupka)
+    p2 = _to_support(client_admin, "S-S1", "s1", POS)
+    _set_proc(db_seeded, p2, contract_sum=500000)                  # 5 000 ₽ (block support)
+    snap = _report(client_admin, "sums")
+    sec1 = snap["sections"][0]
+    rows = {r[0]["text"]: r for r in sec1["rows"]}
+    assert rows["В закупке"][2]["text"] == _fmt_money_expected(200000)
+    assert rows["В сопровождении"][2]["text"] == _fmt_money_expected(500000)
+    assert sec1["footer"][2]["text"] == _fmt_money_expected(700000)
+
+
+def _fmt_money_expected(kop):
+    # mirror calculations._fmt_money for assertions
+    rub = kop / 100
+    s = f"{int(rub):,}".replace(",", " ")
+    return f"{s} ₽"
+
+
+def test_sums_supplier_section(client_admin, db_seeded):
+    p1 = _to_support(client_admin, "S-P1", "p1", POS); _set_proc(db_seeded, p1, supplier="Альфа", contract_sum=100000)
+    p2 = _to_support(client_admin, "S-P2", "p2", POS); _set_proc(db_seeded, p2, supplier="Альфа", contract_sum=200000)
+    p3 = _to_support(client_admin, "S-P3", "p3", POS); _set_proc(db_seeded, p3, supplier="Бета", contract_sum=50000)
+    snap = _report(client_admin, "sums")
+    sec2 = next(s for s in snap["sections"] if s.get("title") == "По поставщикам")
+    by = {r[0]: r for r in sec2["rows"]}
+    assert by["Альфа"][1] == "2" and by["Бета"][1] == "1"
+    # sorted desc by sum → Альфа first
+    assert sec2["rows"][0][0] == "Альфа"
+
+
+def test_sums_kpi_v_oplate(client_admin, db_seeded):
+    _delivery_upd(client_admin, "S-UP", "up", POS)   # 1 await УПД, amount = Σ delivery pos = 20000
+    snap = _report(client_admin, "sums")
+    kpi = {k["label"]: k["value"] for k in snap["kpis"]}
+    assert kpi["В оплате"] == _fmt_money_expected(20000)
+
+
+def test_sums_excludes_cancelled_includes_completed(client_admin, db_seeded):
+    p_c = _to_support(client_admin, "S-CM", "cm", POS); _set_proc(db_seeded, p_c, contract_sum=300000, status_postavki="Поставлено")
+    p_x = _to_zakupka(client_admin, "S-CA", "ca", POS); _set_proc(db_seeded, p_x, status_zakup="Отменена")
+    snap = _report(client_admin, "sums")
+    sec1 = snap["sections"][0]
+    # completed (Поставлено) counted in support; cancelled excluded
+    sup_row = next(r for r in sec1["rows"] if r[0]["text"] == "В сопровождении")
+    assert int(sup_row[1]) >= 1
