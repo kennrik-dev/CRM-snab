@@ -512,3 +512,45 @@ def test_people_dept_fallback(client_admin, db_seeded):
     row = next(r for r in snap["sections"][0]["rows"] if r[0] == "Z")
     # admin has no department → "—"
     assert row[1] == "—"
+
+# --- 9.1 Task 7: export --------------------------------------------------------
+
+def test_export_csv_content_type_and_body(client_admin, db_seeded):
+    _to_zakupka(client_admin, "X-1", "x1", POS)
+    r = client_admin.get("/reports/time/export?format=csv")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/csv")
+    assert r.content.startswith(b"\xef\xbb\xbf")            # UTF-8 BOM
+    assert "Время на этапе" in r.text
+    assert "content-disposition" in {k.lower() for k in r.headers}
+    assert ".csv" in r.headers["content-disposition"]
+
+
+def test_export_excel(client_admin):
+    r = client_admin.get("/reports/sums/export?format=excel")
+    assert r.status_code == 200
+    assert "spreadsheetml" in r.headers["content-type"]
+    assert r.content[:2] == b"PK"                            # xlsx zip signature
+    assert ".xlsx" in r.headers["content-disposition"]
+
+
+def test_export_pdf(client_admin):
+    r = client_admin.get("/reports/late/export?format=pdf")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "application/pdf"
+    assert r.content[:4] == b"%PDF"
+    assert ".pdf" in r.headers["content-disposition"]
+
+
+def test_export_unknown_format_422(client_admin):
+    assert client_admin.get("/reports/time/export?format=docx").status_code == 422
+
+
+def test_export_unknown_type_404(client_admin):
+    assert client_admin.get("/reports/bogus/export?format=csv").status_code == 404
+
+
+def test_export_forbidden_employee(client_seeded, db_seeded):
+    u = _make_role_user(db_seeded, "k3@crm.local", "Комплектация")
+    _login_as(client_seeded, u.email)
+    assert client_seeded.get("/reports/time/export?format=csv").status_code == 403

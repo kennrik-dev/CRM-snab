@@ -8,10 +8,11 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session
 
 from app import calculations as calc
+from app import export as export_mod
 from app.db import get_db
 from app.models import User
 from app.permissions import require_action
@@ -89,3 +90,40 @@ def get_report(
     _validate_period(flt)
     snap = _BUILDERS[type](db, calc.today_moscow(), flt)
     return ReportOut(**snap)
+
+
+@router.get("/{type}/export")
+def export_report(
+    type: str,
+    format: str = Query(...),
+    period: Optional[str] = Query(default=None),
+    date_from: Optional[str] = Query(default=None),
+    date_to: Optional[str] = Query(default=None),
+    mtr: Optional[str] = Query(default=None),
+    supplier: Optional[str] = Query(default=None),
+    author: Optional[str] = Query(default=None),
+    db: Session = Depends(get_db),
+    _user: User = Depends(require_action("reports", "view")),
+) -> Response:
+    if type not in REPORT_TYPES:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="unknown report type")
+    if format not in ("excel", "pdf", "csv"):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="unknown format")
+    flt = _build_flt(period, date_from, date_to, mtr, supplier, author)
+    _validate_period(flt)
+    snap = _BUILDERS[type](db, calc.today_moscow(), flt)
+    today_iso = calc.today_moscow().isoformat()
+    filename = f"otchety_{type}_{today_iso}"
+    if format == "csv":
+        body = export_mod.render_csv(snap).encode("utf-8")
+        return Response(body, media_type="text/csv; charset=utf-8",
+                        headers={"Content-Disposition": f'attachment; filename="{filename}.csv"'})
+    if format == "excel":
+        buf = export_mod.render_excel(snap)
+        return Response(buf.getvalue(),
+                        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        headers={"Content-Disposition": f'attachment; filename="{filename}.xlsx"'})
+    # pdf
+    buf = export_mod.render_pdf(snap)
+    return Response(buf.getvalue(), media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename="{filename}.pdf"'})
