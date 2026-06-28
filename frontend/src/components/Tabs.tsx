@@ -4,6 +4,8 @@ import { listRequests } from '../api/requests'
 import { listProcurements } from '../api/procedures'
 import { listSupport } from '../api/support'
 import { listPayments } from '../api/payments'
+import { useAuth } from '../auth/AuthContext'
+import { canView } from '../lib/permissions'
 
 type TabDef = { to: string; label: string; showCounter?: boolean }
 
@@ -45,10 +47,14 @@ export function Tabs() {
   const zakupTotal = zakup.data?.total
   const soppTotal = sopp.data?.total
   const oplatTotal = oplat.data?.total
+  const { permissions } = useAuth()
+  const tabs = TABS.filter(
+    (t) => t.to !== '/otchety' || canView(permissions, 'reports'),
+  )
 
   return (
     <div className="tabs">
-      {TABS.map((t) => {
+      {tabs.map((t) => {
         const count =
           t.to === '/komplektaciya'
             ? (komplTotal ?? '—')
