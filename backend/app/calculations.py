@@ -898,9 +898,83 @@ def report_late(db, today: date, flt: dict) -> dict:
 
 
 def report_people(db, today: date, flt: dict) -> dict:
-    """Сводка по составителям/отделам. Stub — real in Task 6."""
-    return {"type": "people", "title": "Сводка по составителям/отделам",
-            "period": None, "kpis": [], "sections": []}
+    """Сводка по составителям/отделам (spec R7/R8)."""
+    from app.models import ParentRequest, Procedure, Tender, User
+
+    ctx = _load_report_ctx(db, today, flt)
+    has_period = ctx.has_period
+    mtr = flt.get("mtr")
+    author = flt.get("author")
+
+    def in_period(zagruzka_iso):
+        if not has_period:
+            return True
+        zg = _parse_date(zagruzka_iso)
+        return zg is not None and ctx.from_d <= zg <= ctx.to_d
+
+    # procedures grouped by their parent's sostavitel
+    procs_by_parent: dict = defaultdict(list)
+    for p in ctx.procs:
+        # parent may be outside ctx filter set if filtered by supplier/mtr — but ctx.procs are filtered;
+        # find parent id via tender
+        pass
+    # Build parent→procs map from a fresh query over ALL non-cancelled parents passing filters,
+    # so awaiting-only parents (no procedures) still appear.
+    q = db.query(ParentRequest).filter(ParentRequest.status != "cancelled")
+    user_dept = {u_id: u_dept for u_id, u_dept in db.query(User.id, User.department).all()}
+    groups: dict = {}  # sostavitel -> {dept, parents:set, proc_count, sum}
+    for par in q.all():
+        if mtr and par.mtr != mtr:
+            continue
+        if author and par.sostavitel != author:
+            continue
+        if not in_period(par.zagruzka):
+            continue
+        dept = par.dept or user_dept.get(par.created_by) or "—"
+        g = groups.setdefault(par.sostavitel or "—", {"dept": dept, "parents": set(), "proc_count": 0, "sum": 0})
+        g["parents"].add(par.id)
+    # attach procedures of these parents
+    parent_ids = [pid for g in groups.values() for pid in g["parents"]] or [0]
+    proc_rows = (
+        db.query(Procedure, Tender.parent_id)
+        .join(Tender, Procedure.tender_id == Tender.id)
+        .filter(Tender.parent_id.in_(parent_ids))
+        .all()
+    )
+    pos_by_proc = ctx.positions_by_proc  # positions for ctx-filtered procs; recompute for all
+    # positions for procs possibly outside ctx filter: load by these proc ids
+    proc_ids_all = [p.id for p, _pid in proc_rows] or [0]
+    from app.models import ProcedurePosition
+    pos_rows = db.query(ProcedurePosition).filter(ProcedurePosition.procedure_id.in_(proc_ids_all)).all()
+    pos_map = defaultdict(list)
+    for pp in pos_rows:
+        pos_map[pp.procedure_id].append(pp)
+    parent_of_proc = {p.id: pid for p, pid in proc_rows}
+    for p, pid in proc_rows:
+        # find the group by parent's sostavitel
+        par = db.query(ParentRequest).filter_by(id=pid).first()
+        if par is None or par.status == "cancelled":
+            continue
+        key = par.sostavitel or "—"
+        if key not in groups:
+            continue
+        if p.status_zakup == "Отменена" or p.status_postavki == "Отменена":
+            continue
+        groups[key]["proc_count"] += 1
+        groups[key]["sum"] += proc_sum(p, pos_map.get(p.id, []))
+
+    cols = [
+        {"key": "sost", "label": "Составитель", "kind": "text", "align": "left"},
+        {"key": "dept", "label": "Отдел", "kind": "text", "align": "left"},
+        {"key": "n", "label": "Заявок (Т-)", "kind": "num", "align": "right"},
+        {"key": "sub", "label": "Доч. заявок", "kind": "num", "align": "right"},
+        {"key": "sum", "label": "Сумма договоров", "kind": "money", "align": "right"},
+    ]
+    items = sorted(groups.items(), key=lambda kv: kv[1]["sum"], reverse=True)
+    rows = [[sost, g["dept"], str(len(g["parents"])), str(g["proc_count"]), _money(g["sum"])]
+            for sost, g in items]
+    section = {"title": None, "columns": cols, "rows": rows, "footer": None}
+    return _snapshot("people", "Сводка по составителям/отделам", ctx, [], [section])
 
 
 def _resolve_period(flt: dict, today: date):

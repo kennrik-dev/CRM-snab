@@ -461,3 +461,54 @@ def test_late_manual_upd_included_no_period(client_admin):
     snap = _report(client_admin, "late")
     sec = next(s for s in snap["sections"] if s.get("title") == "Оплаты")
     assert any(r[0] == "UPD-MAN2" for r in sec["rows"])
+
+
+# --- 9.1 Task 6: report_people -------------------------------------------------
+
+def test_people_group_by_sostavitel(client_admin, db_seeded):
+    # create requests as admin (full_name "Администратор"); set sostavitel explicitly via DB
+    _create_request(client_admin, "PE-1", "t1", POS)
+    _create_request(client_admin, "PE-2", "t2", POS)
+    from app.models import ParentRequest
+    db_seeded.query(ParentRequest).filter_by(code="PE-1").update({"sostavitel": "Орлова А."})
+    db_seeded.query(ParentRequest).filter_by(code="PE-2").update({"sostavitel": "Седов В."})
+    db_seeded.commit()
+    snap = _report(client_admin, "people")
+    rows = {r[0]: r for r in snap["sections"][0]["rows"]}
+    assert "Орлова А." in rows and "Седов В." in rows
+    assert rows["Орлова А."][2] == "1"   # 1 заявка
+
+
+def test_people_counts_procedures_and_sum(client_admin, db_seeded):
+    # one parent with one procedure in zakupka; set contract_sum explicitly
+    pid = _to_zakupka(client_admin, "PE-P1", "p1", POS)
+    _set_proc(db_seeded, pid, contract_sum=200000)                 # 2 000 ₽
+    from app.models import ParentRequest, Procedure, Tender
+    par_id = db_seeded.query(Tender).join(Procedure, Procedure.tender_id == Tender.id).filter(Procedure.id == pid).first().parent_id
+    db_seeded.query(ParentRequest).filter_by(id=par_id).update({"sostavitel": "Орлова А."})
+    db_seeded.commit()
+    snap = _report(client_admin, "people")
+    row = next(r for r in snap["sections"][0]["rows"] if r[0] == "Орлова А.")
+    assert row[3] == "1"                  # 1 procedure
+    assert row[4]["text"] == "2 000 ₽"
+
+
+def test_people_excludes_cancelled_parent(client_admin, db_seeded):
+    _create_request(client_admin, "PE-CA", "ca", POS)
+    from app.models import ParentRequest
+    db_seeded.query(ParentRequest).filter_by(code="PE-CA").update({"sostavitel": "X", "status": "cancelled"})
+    db_seeded.commit()
+    snap = _report(client_admin, "people")
+    assert all(r[0] != "X" for r in snap["sections"][0]["rows"])
+
+
+def test_people_dept_fallback(client_admin, db_seeded):
+    # parent.dept null → fallback to creator's department
+    _create_request(client_admin, "PE-D1", "d1", POS)
+    from app.models import ParentRequest
+    db_seeded.query(ParentRequest).filter_by(code="PE-D1").update({"sostavitel": "Z", "dept": None})
+    db_seeded.commit()
+    snap = _report(client_admin, "people")
+    row = next(r for r in snap["sections"][0]["rows"] if r[0] == "Z")
+    # admin has no department → "—"
+    assert row[1] == "—"
