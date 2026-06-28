@@ -60,8 +60,15 @@ def get_filters(
     db: Session = Depends(get_db),
     _user: User = Depends(require_action("reports", "view")),
 ) -> FiltersOut:
-    # Real distinct options land in Task 2; stub returns empty lists.
-    return FiltersOut(mtr=[], supplier=[], author=[])
+    from app.models import ParentRequest, Procedure
+
+    mtr_p = [r[0] for r in db.query(ParentRequest.mtr).filter(ParentRequest.mtr.isnot(None)).distinct()]
+    mtr_pr = [r[0] for r in db.query(Procedure.mtr).filter(Procedure.mtr.isnot(None)).distinct()]
+    suppliers = [r[0] for r in db.query(Procedure.supplier)
+                 .filter(Procedure.supplier.isnot(None)).distinct().order_by(Procedure.supplier)]
+    authors = [r[0] for r in db.query(ParentRequest.sostavitel)
+               .filter(ParentRequest.sostavitel.isnot(None)).distinct().order_by(ParentRequest.sostavitel)]
+    return FiltersOut(mtr=sorted(set(mtr_p + mtr_pr)), supplier=suppliers, author=authors)
 
 
 @router.get("/{type}", response_model=ReportOut)

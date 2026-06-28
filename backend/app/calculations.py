@@ -683,6 +683,133 @@ def report_people(db, today: date, flt: dict) -> dict:
             "period": None, "kpis": [], "sections": []}
 
 
+def _resolve_period(flt: dict, today: date):
+    """(from_d, to_d, period_info|None). None period → (None,None,None)."""
+    period = flt.get("period")
+    if not period:
+        return None, None, None
+    if period == "custom":
+        f = _parse_date(flt.get("date_from"))
+        t = _parse_date(flt.get("date_to"))
+        return f, t, {"key": "custom", "label": "Произвольный",
+                      "from": flt.get("date_from") or "", "to": flt.get("date_to") or ""}
+    if period == "month":
+        from datetime import date as _date
+        f = _date(today.year, today.month, 1); label = "Текущий месяц"
+    elif period == "quarter":
+        from datetime import date as _date
+        qm = ((today.month - 1) // 3) * 3 + 1
+        f = _date(today.year, qm, 1); label = "Квартал"
+    elif period == "year":
+        from datetime import date as _date
+        f = _date(today.year, 1, 1); label = "С начала года"
+    else:
+        return None, None, None
+    return f, today, {"key": period, "label": label, "from": f.isoformat(), "to": today.isoformat()}
+
+
+def _load_report_ctx(db, today: date, flt: dict):
+    """Filtered universe shared by all 4 report builders (spec R3/R6/R8)."""
+    from app.models import (
+        Delivery, ParentRequest, Procedure, ProcedurePosition, Tender, UpdPayment,
+    )
+
+    from_d, to_d, period_info = _resolve_period(flt, today)
+    has_period = from_d is not None
+    mtr = flt.get("mtr")
+    supplier = flt.get("supplier")
+    author = flt.get("author")
+
+    def in_period(zagruzka_iso):
+        if not has_period:
+            return True
+        zg = _parse_date(zagruzka_iso)
+        return zg is not None and from_d <= zg <= to_d
+
+    rows = (
+        db.query(Procedure, ParentRequest)
+        .join(Tender, Procedure.tender_id == Tender.id)
+        .join(ParentRequest, Tender.parent_id == ParentRequest.id)
+        .all()
+    )
+    procs: list = []
+    parent_by_proc: dict = {}
+    for p, par in rows:
+        eff_mtr = p.mtr or par.mtr
+        if mtr and eff_mtr != mtr:
+            continue
+        if supplier and (p.supplier or None) != supplier:
+            continue
+        if author and par.sostavitel != author:
+            continue
+        if not in_period(par.zagruzka):
+            continue
+        procs.append(p)
+        parent_by_proc[p.id] = {
+            "code": par.code, "title": par.title, "mtr": par.mtr, "srok": par.srok,
+            "sostavitel": par.sostavitel, "dept": par.dept,
+            "zagruzka": par.zagruzka, "created_by": par.created_by,
+        }
+
+    proc_ids = [p.id for p in procs] or [0]
+    deliveries = db.query(Delivery).filter(Delivery.procedure_id.in_(proc_ids)).all()
+    positions = db.query(ProcedurePosition).filter(ProcedurePosition.procedure_id.in_(proc_ids)).all()
+
+    deliveries_by_proc = defaultdict(list)
+    for d in deliveries:
+        deliveries_by_proc[d.procedure_id].append(d)
+    positions_by_proc = defaultdict(list)
+    for pp in positions:
+        positions_by_proc[pp.procedure_id].append(pp)
+    delivery_proc = {d.id: d.procedure_id for d in deliveries}
+
+    active = or_(Procedure.status_postavki.is_(None), Procedure.status_postavki != "Отменена")
+    upds = (
+        db.query(UpdPayment)
+        .join(Delivery, UpdPayment.delivery_id == Delivery.id, isouter=True)
+        .join(Procedure, Delivery.procedure_id == Procedure.id, isouter=True)
+        .filter(active)
+        .all()
+    )
+    # R6: manual УПД (no delivery/procedure) can't be period-anchored → drop when a period is active
+    if has_period:
+        upds = [u for u in upds if u.delivery_id is not None]
+    upds_by_proc = defaultdict(list)
+    for u in upds:
+        pid = delivery_proc.get(u.delivery_id)
+        if pid is not None:
+            upds_by_proc[pid].append(u)
+
+    completed_proc_ids = set()
+    for p in procs:
+        if is_procedure_completed(p, upds_by_proc.get(p.id, [])):
+            completed_proc_ids.add(p.id)
+
+    aw_q = (
+        db.query(ParentRequest)
+        .filter(ParentRequest.status == "awaiting")
+        .filter(~db.query(Tender).filter(Tender.parent_id == ParentRequest.id).exists())
+    )
+    awaiting_parents = []
+    for par in aw_q.all():
+        if mtr and par.mtr != mtr:
+            continue
+        if author and par.sostavitel != author:
+            continue
+        if not in_period(par.zagruzka):
+            continue
+        awaiting_parents.append(par)
+
+    return SimpleNamespace(
+        today=today, period_info=period_info, from_d=from_d, to_d=to_d, has_period=has_period,
+        procs=procs, parent_by_proc=parent_by_proc,
+        deliveries=deliveries, deliveries_by_proc=deliveries_by_proc,
+        positions_by_proc=positions_by_proc,
+        upds=upds, upds_by_proc=upds_by_proc, completed_proc_ids=completed_proc_ids,
+        delivery_proc=delivery_proc, awaiting_parents=awaiting_parents,
+    )
+
+
 __all__ = [
     "today_moscow",
     "position_sum",

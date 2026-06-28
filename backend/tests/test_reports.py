@@ -216,3 +216,78 @@ def test_filters_shape(client_admin):
     r = client_admin.get("/reports")
     assert r.status_code == 200
     assert set(r.json().keys()) == {"mtr", "supplier", "author"}
+
+
+# --- 9.1 Task 2: period + ctx + filters ---------------------------------------
+
+from app import calculations as calc
+
+
+def test_resolve_period_month():
+    f, t, info = calc._resolve_period({"period": "month"}, TODAY)
+    assert f == TODAY.replace(day=1)
+    assert t == TODAY
+    assert info["key"] == "month" and info["label"] == "Текущий месяц"
+
+
+def test_resolve_period_quarter():
+    f, t, info = calc._resolve_period({"period": "quarter"}, TODAY)
+    qm = ((TODAY.month - 1) // 3) * 3 + 1
+    from datetime import date
+    assert f == date(TODAY.year, qm, 1)
+
+
+def test_resolve_period_year():
+    f, t, info = calc._resolve_period({"period": "year"}, TODAY)
+    from datetime import date
+    assert f == date(TODAY.year, 1, 1)
+    assert info["label"] == "С начала года"
+
+
+def test_resolve_period_custom():
+    f, t, info = calc._resolve_period(
+        {"period": "custom", "date_from": days_ago(10), "date_to": days_ago(2)}, TODAY)
+    assert info["key"] == "custom"
+    assert info["from"] == days_ago(10)
+
+
+def test_resolve_period_none():
+    f, t, info = calc._resolve_period({}, TODAY)
+    assert f is None and t is None and info is None
+
+
+def test_ctx_period_filters_procedures_by_zagruzka(client_admin, db_seeded):
+    from app.models import ParentRequest, Procedure, Tender
+    p_in = _to_zakupka(client_admin, "P-IN", "in", POS)
+    p_out = _to_zakupka(client_admin, "P-OUT", "out", POS)
+    # move p_out's parent zagruzka to a date firmly in the previous month
+    out_par_id = (db_seeded.query(Tender)
+                  .join(Procedure, Procedure.tender_id == Tender.id)
+                  .filter(Procedure.id == p_out).first()).parent_id
+    db_seeded.query(ParentRequest).filter_by(id=out_par_id).update({"zagruzka": last_month_date()})
+    db_seeded.commit()
+    ctx = calc._load_report_ctx(db_seeded, TODAY, {"period": "month"})
+    ids = [p.id for p in ctx.procs]
+    assert p_in in ids and p_out not in ids
+
+
+def test_ctx_filters_mtr_supplier_author(client_admin, db_seeded):
+    _to_zakupka(client_admin, "F-MTR", "mtr", [{"name": "x", "qty": 1, "unit": "шт", "price": 100}])
+    # filter by supplier that doesn't exist → empty
+    ctx = calc._load_report_ctx(db_seeded, TODAY, {"supplier": "Никто"})
+    assert ctx.procs == []
+
+
+def test_filters_endpoint_returns_distinct(client_admin, db_seeded):
+    _to_zakupka(client_admin, "F-S1", "s1", POS)               # supplier unset here
+    proc_id = _to_support(client_admin, "F-S2", "s2", POS)
+    _set_proc(db_seeded, proc_id, supplier="ООО Ромашка")
+    r = client_admin.get("/reports")
+    body = r.json()
+    assert "ООО Ромашка" in body["supplier"]
+
+
+def test_filters_endpoint_forbidden_employee(client_seeded, db_seeded):
+    u = _make_role_user(db_seeded, "k2@crm.local", "Комплектация")
+    _login_as(client_seeded, u.email)
+    assert client_seeded.get("/reports").status_code == 403
