@@ -239,6 +239,14 @@ def _fmt_money(kopecks: int) -> str:
     return f"{sign}{int_part} ₽"
 
 
+def _fmt_date(value) -> str:
+    """ISO 'YYYY-MM-DD' → 'ДД.ММ.ГГ'. None/invalid → ''."""
+    d = _parse_date(value)
+    if d is None:
+        return ""
+    return f"{d.day:02d}.{d.month:02d}.{str(d.year)[2:]}"
+
+
 def is_procedure_completed(proc, upds) -> bool:
     """Завершённая процедура (Phase 6 R6): Поставлено AND ≥1 УПД AND all paid."""
     if getattr(proc, "status_postavki", None) != "Поставлено":
@@ -647,6 +655,34 @@ def dashboard(db, today: date) -> dict:
     }
 
 
+# ---------------------------------------------------------------------------
+# Reports (Phase 9.1) — docs/15, docs/32 §8
+# ---------------------------------------------------------------------------
+
+def report_time(db, today: date, flt: dict) -> dict:
+    """Время на этапе / зависания. Stub — real in Task 3."""
+    return {"type": "time", "title": "Время на этапе и зависания",
+            "period": None, "kpis": [], "sections": []}
+
+
+def report_sums(db, today: date, flt: dict) -> dict:
+    """Суммы по этапам и поставщикам. Stub — real in Task 4."""
+    return {"type": "sums", "title": "Суммы по этапам и поставщикам",
+            "period": None, "kpis": [], "sections": []}
+
+
+def report_late(db, today: date, flt: dict) -> dict:
+    """Просрочки: поставки и оплаты. Stub — real in Task 5."""
+    return {"type": "late", "title": "Просрочки: поставки и оплаты",
+            "period": None, "kpis": [], "sections": []}
+
+
+def report_people(db, today: date, flt: dict) -> dict:
+    """Сводка по составителям/отделам. Stub — real in Task 6."""
+    return {"type": "people", "title": "Сводка по составителям/отделам",
+            "period": None, "kpis": [], "sections": []}
+
+
 __all__ = [
     "today_moscow",
     "position_sum",
@@ -662,4 +698,9 @@ __all__ = [
     "dashboard",
     "is_procedure_completed",
     "proc_sum",
+    "_fmt_date",
+    "report_time",
+    "report_sums",
+    "report_late",
+    "report_people",
 ]

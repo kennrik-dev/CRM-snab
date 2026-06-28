@@ -9,6 +9,8 @@ dependencies = [
     "sqlalchemy>=2.0",
     "alembic",
     "pydantic>=2",
+    "openpyxl",
+    "reportlab",
     "bcrypt>=5",
     "itsdangerous",
     "python-multipart",
