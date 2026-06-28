@@ -898,12 +898,17 @@ def report_late(db, today: date, flt: dict) -> dict:
 
 
 def report_people(db, today: date, flt: dict) -> dict:
-    """Сводка по составителям/отделам (spec R7/R8)."""
-    from app.models import ParentRequest, Procedure, Tender, User
+    """Сводка по составителям/отделам (spec R7/R8).
+
+    mtr/author/period filter at parent level; supplier filter at procedure level
+    (a parent counts only if it has ≥1 procedure with that supplier).
+    """
+    from app.models import ParentRequest, Procedure, ProcedurePosition, Tender, User
 
     ctx = _load_report_ctx(db, today, flt)
     has_period = ctx.has_period
     mtr = flt.get("mtr")
+    supplier = flt.get("supplier")
     author = flt.get("author")
 
     def in_period(zagruzka_iso):
@@ -912,56 +917,48 @@ def report_people(db, today: date, flt: dict) -> dict:
         zg = _parse_date(zagruzka_iso)
         return zg is not None and ctx.from_d <= zg <= ctx.to_d
 
-    # procedures grouped by their parent's sostavitel
+    # Parent universe: non-cancelled, passing parent-level filters (mtr/author/period).
+    user_dept = {uid: dept for uid, dept in db.query(User.id, User.department).all()}
+    parents = [
+        par for par in db.query(ParentRequest).filter(ParentRequest.status != "cancelled").all()
+        if (not mtr or par.mtr == mtr)
+        and (not author or par.sostavitel == author)
+        and in_period(par.zagruzka)
+    ]
+
+    # Procedures of these parents, filtered by supplier (procedure-level), excluding Отменена.
+    parent_ids = [par.id for par in parents] or [0]
     procs_by_parent: dict = defaultdict(list)
-    for p in ctx.procs:
-        # parent may be outside ctx filter set if filtered by supplier/mtr — but ctx.procs are filtered;
-        # find parent id via tender
-        pass
-    # Build parent→procs map from a fresh query over ALL non-cancelled parents passing filters,
-    # so awaiting-only parents (no procedures) still appear.
-    q = db.query(ParentRequest).filter(ParentRequest.status != "cancelled")
-    user_dept = {u_id: u_dept for u_id, u_dept in db.query(User.id, User.department).all()}
-    groups: dict = {}  # sostavitel -> {dept, parents:set, proc_count, sum}
-    for par in q.all():
-        if mtr and par.mtr != mtr:
-            continue
-        if author and par.sostavitel != author:
-            continue
-        if not in_period(par.zagruzka):
-            continue
-        dept = par.dept or user_dept.get(par.created_by) or "—"
-        g = groups.setdefault(par.sostavitel or "—", {"dept": dept, "parents": set(), "proc_count": 0, "sum": 0})
-        g["parents"].add(par.id)
-    # attach procedures of these parents
-    parent_ids = [pid for g in groups.values() for pid in g["parents"]] or [0]
-    proc_rows = (
+    for p, pid in (
         db.query(Procedure, Tender.parent_id)
         .join(Tender, Procedure.tender_id == Tender.id)
         .filter(Tender.parent_id.in_(parent_ids))
         .all()
-    )
-    pos_by_proc = ctx.positions_by_proc  # positions for ctx-filtered procs; recompute for all
-    # positions for procs possibly outside ctx filter: load by these proc ids
-    proc_ids_all = [p.id for p, _pid in proc_rows] or [0]
-    from app.models import ProcedurePosition
-    pos_rows = db.query(ProcedurePosition).filter(ProcedurePosition.procedure_id.in_(proc_ids_all)).all()
-    pos_map = defaultdict(list)
-    for pp in pos_rows:
-        pos_map[pp.procedure_id].append(pp)
-    parent_of_proc = {p.id: pid for p, pid in proc_rows}
-    for p, pid in proc_rows:
-        # find the group by parent's sostavitel
-        par = db.query(ParentRequest).filter_by(id=pid).first()
-        if par is None or par.status == "cancelled":
-            continue
-        key = par.sostavitel or "—"
-        if key not in groups:
-            continue
+    ):
         if p.status_zakup == "Отменена" or p.status_postavki == "Отменена":
             continue
-        groups[key]["proc_count"] += 1
-        groups[key]["sum"] += proc_sum(p, pos_map.get(p.id, []))
+        if supplier and (p.supplier or None) != supplier:
+            continue
+        procs_by_parent[pid].append(p)
+
+    # Positions for the matching procedures (for proc_sum).
+    matching_proc_ids = [p.id for plist in procs_by_parent.values() for p in plist] or [0]
+    pos_map: dict = defaultdict(list)
+    for pp in db.query(ProcedurePosition).filter(ProcedurePosition.procedure_id.in_(matching_proc_ids)).all():
+        pos_map[pp.procedure_id].append(pp)
+
+    # Group by составитель; under a supplier filter, parents with no matching procedure are skipped.
+    groups: dict = {}
+    for par in parents:
+        plist = procs_by_parent.get(par.id, [])
+        if supplier and not plist:
+            continue
+        dept = par.dept or user_dept.get(par.created_by) or "—"
+        g = groups.setdefault(par.sostavitel or "—", {"dept": dept, "parents": set(), "proc_count": 0, "sum": 0})
+        g["parents"].add(par.id)
+        for p in plist:
+            g["proc_count"] += 1
+            g["sum"] += proc_sum(p, pos_map.get(p.id, []))
 
     cols = [
         {"key": "sost", "label": "Составитель", "kind": "text", "align": "left"},
@@ -1065,9 +1062,22 @@ def _load_report_ctx(db, today: date, flt: dict):
         .filter(active)
         .all()
     )
-    # R6: manual УПД (no delivery/procedure) can't be period-anchored → drop when a period is active
-    if has_period:
-        upds = [u for u in upds if u.delivery_id is not None]
+    # Scope УПД to the same filtered universe as ctx.procs (R6 + mtr/supplier/author):
+    #  - delivery-УПД: keep iff its procedure is in the filtered set (inherits every filter);
+    #  - manual-УПД (no procedure/parent): R6 drops under active period; it can match a supplier
+    #    filter (own supplier field) but cannot satisfy mtr/author (no parent) → drop.
+    filtered_proc_ids = {p.id for p in procs}
+
+    def _upd_in_scope(u):
+        if u.delivery_id is not None:
+            return delivery_proc.get(u.delivery_id) in filtered_proc_ids
+        if has_period or mtr or author:
+            return False
+        if supplier and (u.supplier or None) != supplier:
+            return False
+        return True
+
+    upds = [u for u in upds if _upd_in_scope(u)]
     upds_by_proc = defaultdict(list)
     for u in upds:
         pid = delivery_proc.get(u.delivery_id)

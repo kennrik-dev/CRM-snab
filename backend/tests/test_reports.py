@@ -554,3 +554,45 @@ def test_export_forbidden_employee(client_seeded, db_seeded):
     u = _make_role_user(db_seeded, "k3@crm.local", "Комплектация")
     _login_as(client_seeded, u.email)
     assert client_seeded.get("/reports/time/export?format=csv").status_code == 403
+
+
+# --- 9.1 scope fix: filters apply consistently to payments/people ----------------
+
+def test_late_payments_scoped_by_supplier(client_admin, db_seeded):
+    pid1, d1, _ = _delivery_upd(client_admin, "L-SC1", "sc1", POS)
+    _set_proc(db_seeded, pid1, supplier="Альфа", srok_dd=days_ago(5))
+    pid2, d2, _ = _delivery_upd(client_admin, "L-SC2", "sc2", POS)
+    _set_proc(db_seeded, pid2, supplier="Бета", srok_dd=days_ago(5))
+    from app.models import UpdPayment
+    db_seeded.query(UpdPayment).filter_by(delivery_id=d1["id"]).update({"srok": days_ago(3)})
+    db_seeded.query(UpdPayment).filter_by(delivery_id=d2["id"]).update({"srok": days_ago(3)})
+    db_seeded.commit()
+    snap = _report(client_admin, "late", supplier="Альфа")
+    sec = next(s for s in snap["sections"] if s.get("title") == "Оплаты")
+    upd_nums = [r[0] for r in sec["rows"]]
+    assert "UPD-L-SC1" in upd_nums
+    assert "UPD-L-SC2" not in upd_nums
+
+
+def test_sums_v_oplate_scoped_by_supplier(client_admin, db_seeded):
+    pid1, d1, _ = _delivery_upd(client_admin, "S-OP1", "op1", POS)
+    _set_proc(db_seeded, pid1, supplier="Альфа")
+    pid2, d2, _ = _delivery_upd(client_admin, "S-OP2", "op2", POS)
+    _set_proc(db_seeded, pid2, supplier="Бета")
+    snap = _report(client_admin, "sums", supplier="Альфа")
+    kpi = {k["label"]: k["value"] for k in snap["kpis"]}
+    assert kpi["В оплате"] == _fmt_money_expected(20000)   # only Альфа's await УПД
+
+
+def test_people_supplier_filter_scopes_procedures(client_admin, db_seeded):
+    p1 = _to_zakupka(client_admin, "PE-A1", "a1", POS); _set_proc(db_seeded, p1, supplier="Альфа", contract_sum=100000)
+    p2 = _to_zakupka(client_admin, "PE-B1", "b1", POS); _set_proc(db_seeded, p2, supplier="Бета", contract_sum=200000)
+    from app.models import ParentRequest, Procedure, Tender
+    for pid in (p1, p2):
+        par_id = db_seeded.query(Tender).join(Procedure, Procedure.tender_id == Tender.id).filter(Procedure.id == pid).first().parent_id
+        db_seeded.query(ParentRequest).filter_by(id=par_id).update({"sostavitel": "Орлова А."})
+    db_seeded.commit()
+    snap = _report(client_admin, "people", supplier="Альфа")
+    row = next(r for r in snap["sections"][0]["rows"] if r[0] == "Орлова А.")
+    assert row[3] == "1"                                   # only Альфа procedure counted
+    assert row[4]["text"] == _fmt_money_expected(100000)   # 100000 kop → "1 000 ₽"
