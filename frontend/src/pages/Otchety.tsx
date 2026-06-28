@@ -83,13 +83,25 @@ export function Otchety() {
   const { permissions } = useAuth()
   const [params, setParams] = useState<ReportFilters & { type: ReportType }>({ type: 'time' })
 
+  // Gate the queries: don't auto-fetch for users lacking reports:view (avoids 403
+  // noise on the redirect), and don't auto-fetch an incomplete custom period
+  // (avoids a 422 while the user is still entering the two dates).
+  const canReports = canView(permissions, 'reports')
+  const customIncomplete =
+    params.period === 'custom' && !(params.date_from && params.date_to)
+
   const report = useQuery({
     queryKey: ['reports', params],
     queryFn: () => getReport(params.type, params),
+    enabled: canReports && !customIncomplete,
   })
-  const filters = useQuery({ queryKey: ['reports', 'filters'], queryFn: getFilters })
+  const filters = useQuery({
+    queryKey: ['reports', 'filters'],
+    queryFn: getFilters,
+    enabled: canReports,
+  })
 
-  if (!canView(permissions, 'reports')) return <Navigate to="/dashboard" replace />
+  if (!canReports) return <Navigate to="/dashboard" replace />
 
   const set = (patch: Partial<typeof params>) => setParams((p) => ({ ...p, ...patch }))
   const snap = report.data
