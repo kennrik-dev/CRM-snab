@@ -817,10 +817,84 @@ def report_sums(db, today: date, flt: dict) -> dict:
     return _snapshot("sums", "Суммы по этапам и поставщикам", ctx, kpis, [sec1, sec2])
 
 
+def _empty_note_row(ncols):
+    return [{"kind": "note", "text": "нет"}] + [""] * (ncols - 1)
+
+
+def _upd_claim(u, ctx):
+    """delivery-УПД → (code, proc) claim; manual-УПД → request_label plain string."""
+    if u.delivery_id is not None:
+        pid = ctx.delivery_proc.get(u.delivery_id)
+        if pid is not None:
+            par = ctx.parent_by_proc.get(pid, {})
+            proc = next((p for p in ctx.procs if p.id == pid), None)
+            return _claim(par.get("code"), proc.proc if proc and proc.proc else par.get("title"))
+    return u.request_label or "—"
+
+
 def report_late(db, today: date, flt: dict) -> dict:
-    """Просрочки: поставки и оплаты. Stub — real in Task 5."""
-    return {"type": "late", "title": "Просрочки: поставки и оплаты",
-            "period": None, "kpis": [], "sections": []}
+    """Просрочки: поставки и оплаты (spec R6/R8)."""
+    ctx = _load_report_ctx(db, today, flt)
+    today = ctx.today
+
+    late_dels = []  # (proc, delivery, is_late)
+    for p in ctx.procs:
+        if p.status_postavki == "Отменена":
+            continue
+        for d in ctx.deliveries_by_proc.get(p.id, []):
+            ov = is_delivery_overdue(d, p.srok_dd, today)
+            lt = is_delivery_late(d, p.srok_dd, today)
+            if ov or lt:
+                late_dels.append((p, d, lt))
+
+    late_upds = [u for u in ctx.upds if is_upd_overdue(u, today)]
+
+    kpis = [
+        _kpi("Просроч. поставок", str(len(late_dels)), "--late"),
+        _kpi("Просроч. оплат", str(len(late_upds)), "--late"),
+    ]
+
+    cols_d = [
+        {"key": "claim", "label": "Заявка", "kind": "claim", "align": "left"},
+        {"key": "num", "label": "№", "kind": "mono", "align": "left"},
+        {"key": "supplier", "label": "Поставщик", "kind": "text", "align": "left"},
+        {"key": "deliv", "label": "Поставка", "kind": "text", "align": "left"},
+        {"key": "pct", "label": "% позиций", "kind": "percent", "align": "right"},
+        {"key": "srok", "label": "Срок ДД", "kind": "date-late", "align": "left"},
+    ]
+    rows_d = []
+    for p, d, lt in late_dels:
+        par = ctx.parent_by_proc.get(p.id, {})
+        positions = ctx.positions_by_proc.get(p.id, [])
+        dels = ctx.deliveries_by_proc.get(p.id, [])
+        pct = overdue_pct(positions, dels, p.srok_dd, today)
+        rows_d.append([
+            _claim(par.get("code"), par.get("title")),
+            p.proc or "—",
+            p.supplier or "—",
+            f"№{d.n}" + (" (с задержкой)" if lt else ""),
+            _pct(pct),
+            _date_late(p.srok_dd),
+        ])
+    if not rows_d:
+        rows_d = [_empty_note_row(len(cols_d))]
+    sec_d = {"title": "Поставки", "columns": cols_d, "rows": rows_d, "footer": None}
+
+    cols_p = [
+        {"key": "upd", "label": "УПД", "kind": "mono", "align": "left"},
+        {"key": "claim", "label": "Заявка", "kind": "claim", "align": "left"},
+        {"key": "supplier", "label": "Поставщик", "kind": "text", "align": "left"},
+        {"key": "sum", "label": "Сумма", "kind": "money", "align": "right"},
+    ]
+    rows_p = []
+    for u in late_upds:
+        claim = _upd_claim(u, ctx)
+        rows_p.append([u.upd, claim, u.supplier or "—", _money(u.amount or 0)])
+    if not rows_p:
+        rows_p = [_empty_note_row(len(cols_p))]
+    sec_p = {"title": "Оплаты", "columns": cols_p, "rows": rows_p, "footer": None}
+
+    return _snapshot("late", "Просрочки: поставки и оплаты", ctx, kpis, [sec_d, sec_p])
 
 
 def report_people(db, today: date, flt: dict) -> dict:

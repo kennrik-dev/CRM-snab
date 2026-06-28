@@ -409,3 +409,55 @@ def test_sums_excludes_cancelled_includes_completed(client_admin, db_seeded):
     # completed (Поставлено) counted in support; cancelled excluded
     sup_row = next(r for r in sec1["rows"] if r[0]["text"] == "В сопровождении")
     assert int(sup_row[1]) >= 1
+
+
+# --- 9.1 Task 5: report_late ---------------------------------------------------
+
+def test_late_overdue_delivery(client_admin, db_seeded):
+    pid, d, _upd = _delivery_upd(client_admin, "L-OD", "od", POS)
+    _set_proc(db_seeded, pid, srok_dd=days_ago(5))               # past, transit → overdue
+    snap = _report(client_admin, "late")
+    sec = next(s for s in snap["sections"] if s.get("title") == "Поставки")
+    assert any(r[0].get("code") == "L-OD" for r in sec["rows"])
+    kpi = {k["label"]: k["value"] for k in snap["kpis"]}
+    assert kpi["Просроч. поставок"] == "1"
+
+
+def test_late_payment_overdue(client_admin, db_seeded):
+    pid, d, _upd = _delivery_upd(client_admin, "L-OP", "op", POS)
+    from app.models import UpdPayment
+    db_seeded.query(UpdPayment).filter_by(delivery_id=d["id"]).update({"srok": days_ago(3)})
+    db_seeded.commit()
+    snap = _report(client_admin, "late")
+    sec = next(s for s in snap["sections"] if s.get("title") == "Оплаты")
+    assert any(r[0] == "UPD-L-OP" for r in sec["rows"])
+    kpi = {k["label"]: k["value"] for k in snap["kpis"]}
+    assert kpi["Просроч. оплат"] == "1"
+
+
+def test_late_excludes_cancelled_procedure(client_admin, db_seeded):
+    pid, d, _upd = _delivery_upd(client_admin, "L-CA", "ca", POS)
+    _set_proc(db_seeded, pid, srok_dd=days_ago(5), status_postavki="Отменена")
+    snap = _report(client_admin, "late")
+    sec = next(s for s in snap["sections"] if s.get("title") == "Поставки")
+    assert all(r[0].get("code") != "L-CA" for r in sec["rows"])
+
+
+def test_late_empty_section_shows_note(client_admin):
+    snap = _report(client_admin, "late")
+    sec = next(s for s in snap["sections"] if s.get("title") == "Поставки")
+    assert sec["rows"] and sec["rows"][0][0]["text"] == "нет"
+
+
+def test_late_manual_upd_excluded_when_period(client_admin):
+    client_admin.post("/payments", json={"upd": "UPD-MAN", "supplier": "S", "srok": days_ago(5), "amount": 10000})
+    snap = _report(client_admin, "late", period="month")
+    sec = next(s for s in snap["sections"] if s.get("title") == "Оплаты")
+    assert all("UPD-MAN" not in str(r) for r in sec["rows"])
+
+
+def test_late_manual_upd_included_no_period(client_admin):
+    client_admin.post("/payments", json={"upd": "UPD-MAN2", "supplier": "S", "srok": days_ago(5), "amount": 10000})
+    snap = _report(client_admin, "late")
+    sec = next(s for s in snap["sections"] if s.get("title") == "Оплаты")
+    assert any(r[0] == "UPD-MAN2" for r in sec["rows"])
