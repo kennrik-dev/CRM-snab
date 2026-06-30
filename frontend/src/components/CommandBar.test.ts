@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { initials, roleLabel } from './CommandBar'
+import { initials, roleLabel, shouldSearch, procRoute } from './CommandBar'
 import type { User } from '../api/auth'
 
 function user(over: Partial<User> = {}): User {
@@ -37,4 +37,19 @@ describe('roleLabel', () => {
     expect(roleLabel(user({ account_type: 'department', department: 'Закупки', global_role: null, is_curator: true }))).toBe('Закупки · куратор'))
   it('department null → dash', () =>
     expect(roleLabel(user({ account_type: 'department', department: null, global_role: null }))).toBe('—'))
+})
+
+describe('shouldSearch', () => {
+  it('true for ≥2 non-space chars', () => expect(shouldSearch('Т-67')).toBe(true))
+  it('false for 1 char', () => expect(shouldSearch('Т')).toBe(false))
+  it('false for empty', () => expect(shouldSearch('')).toBe(false))
+  it('false for whitespace-only', () => expect(shouldSearch('   ')).toBe(false))
+  it('true ignoring surrounding spaces', () => expect(shouldSearch('  аб  ')).toBe(true))
+})
+
+describe('procRoute', () => {
+  it('zakupka block → /zakupka/:id', () => expect(procRoute('zakupka', 5)).toBe('/zakupka/5'))
+  it('soprovozhdenie block → /soprovozhdenie/:id', () =>
+    expect(procRoute('soprovozhdenie', 7)).toBe('/soprovozhdenie/7'))
+  it('null block falls back to support card', () => expect(procRoute(null, 9)).toBe('/soprovozhdenie/9'))
 })
