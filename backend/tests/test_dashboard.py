@@ -5,6 +5,8 @@ client_admin (seeded admin, password changed), and role/flow helpers.
 """
 from __future__ import annotations
 
+from datetime import date, timedelta
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, event
@@ -19,6 +21,10 @@ from app.security import hash_password
 ADMIN_EMAIL = "admin@crm.local"
 ADMIN_INITIAL_PASSWORD = "change-me-123"
 ADMIN_NEW_PASSWORD = "newadmin123"
+
+# Deadlines relative to today so the overdue/attention assertions don't rot
+# when the calendar advances past a hardcoded date (was "2026-06-30" = "future").
+_FUTURE_SROK = (date.today() + timedelta(days=30)).isoformat()  # unambiguously future
 
 
 # --- fixtures (mirror test_payments.py) -----------------------------------------
@@ -221,7 +227,7 @@ def test_meter_in_support_excludes_completed(client_admin, db_seeded):
     pid, d, _upd = _delivery_upd(client_admin, "D-SC", "sc", POS1)
     # mark delivered + pay the УПД → completed
     _set_delivery(db_seeded, d["id"], status="done", date="2026-06-15")
-    _set_proc(db_seeded, pid, status_postavki="Поставлено", srok_dd="2026-06-30")
+    _set_proc(db_seeded, pid, status_postavki="Поставлено", srok_dd=_FUTURE_SROK)
     list_id = client_admin.get("/payments").json()["items"][0]["id"]
     client_admin.post(f"/payments/{list_id}/pay")
     # completed → not in operational counters
@@ -230,7 +236,7 @@ def test_meter_in_support_excludes_completed(client_admin, db_seeded):
 
 def test_meter_on_time_pct(client_admin, db_seeded):
     pid, d, _upd = _delivery_upd(client_admin, "D-OT", "ot", POS1)
-    _set_proc(db_seeded, pid, srok_dd="2026-06-30")            # future deadline
+    _set_proc(db_seeded, pid, srok_dd=_FUTURE_SROK)            # future deadline
     _set_delivery(db_seeded, d["id"], status="done", date="2026-06-15")  # before srok → on time
     m = _meters(client_admin)
     assert m["on_time_pct"]["value"] == 100
@@ -343,7 +349,7 @@ def test_attention_no_delivery_no_missing_docs(client_admin):
 
 def test_attention_upd_without_certificate_is_warning(client_admin, db_seeded):
     pid, d, _upd = _delivery_upd(client_admin, "A-CERT", "cert", POS1)
-    _set_proc(db_seeded, pid, srok_dd="2026-06-30")          # not overdue (future)
+    _set_proc(db_seeded, pid, srok_dd=_FUTURE_SROK)          # not overdue (future)
     # mark ТТН/М-15/УПД received (so missing-docs does NOT fire), leave sert=0 (warning)
     _set_delivery(db_seeded, d["id"], doc_ttn=1, doc_m15=1, doc_upd=1)
     items = _attention(client_admin)
@@ -356,7 +362,7 @@ def test_attention_upd_without_certificate_is_warning(client_admin, db_seeded):
 def test_attention_errors_before_warnings(client_admin, db_seeded):
     # warning: UPD without cert (future srok); mark ttn/m15/upd received so only cert fires
     p1, d1, _u1 = _delivery_upd(client_admin, "A-MIX1", "mix1", POS1)
-    _set_proc(db_seeded, p1, srok_dd="2026-06-30")
+    _set_proc(db_seeded, p1, srok_dd=_FUTURE_SROK)
     _set_delivery(db_seeded, d1["id"], doc_ttn=1, doc_m15=1, doc_upd=1)
     # error: overdue delivery
     p2, d2, _u2 = _delivery_upd(client_admin, "A-MIX2", "mix2", POS1)
