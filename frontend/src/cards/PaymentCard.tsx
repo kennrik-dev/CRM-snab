@@ -10,6 +10,7 @@ import {
 } from '../api/payments'
 import { Chip } from '../components/Chip'
 import { EmptyState } from '../components/EmptyState'
+import { HistoryFeed } from '../components/HistoryFeed'
 import { Modal } from '../components/Modal'
 import { payStatusChip } from '../lib/statusColors'
 import { money, dateRu } from '../lib/format'
@@ -298,6 +299,22 @@ export function PaymentCard() {
               </tbody>
             </table>
           </div>
+        </div>
+
+        <div style={{ padding: '0 22px 22px' }}>
+          <div
+            style={{
+              fontSize: 11,
+              letterSpacing: '0.08em',
+              textTransform: 'uppercase',
+              color: 'var(--faint)',
+              fontWeight: 600,
+              marginBottom: 8,
+            }}
+          >
+            История
+          </div>
+          <HistoryFeed entityKind="upd_payment" entityId={paymentId} />
         </div>
       </div>
 

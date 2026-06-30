@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Chip } from '../components/Chip'
 import { EmptyState } from '../components/EmptyState'
+import { CommentFeed } from '../components/CommentFeed'
 import { PositionTable, type PositionTableColumn } from '../components/PositionTable'
 import { useAuth } from '../auth/AuthContext'
 import {
@@ -481,10 +482,7 @@ export function RequestCard() {
           >
             Комментарии
           </div>
-          <EmptyState
-            title="Комментариев пока нет"
-            hint="Лента комментариев появится в Фазе 10."
-          />
+          <CommentFeed targetKind="parent" targetId={req.id} />
         </div>
       </div>
     </div>

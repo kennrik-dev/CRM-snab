@@ -15,6 +15,8 @@ import { sumPositionsKopecks, sisterRoute } from '../lib/supportView'
 import { canEdit } from '../lib/permissions'
 import { useAuth } from '../auth/AuthContext'
 import { DeliverySection } from '../components/support/DeliverySection'
+import { CommentFeed } from '../components/CommentFeed'
+import { HistoryFeed } from '../components/HistoryFeed'
 
 type SoppDraft = {
   contract: string
@@ -344,6 +346,20 @@ export function SupportCard() {
       </div>
 
       <DeliverySection proc={proc} canEditThis={canEditThis} refresh={refresh} />
+
+      <div className="block reg" style={{ '--bc': 'var(--supp)' } as CSSProperties}>
+        <div className="block-h"><span className="btitle">Комментарии</span></div>
+        <div style={{ padding: 12 }}>
+          <CommentFeed targetKind="procedure" targetId={proc.id} />
+        </div>
+      </div>
+
+      <div className="block reg" style={{ '--bc': 'var(--supp)' } as CSSProperties}>
+        <div className="block-h"><span className="btitle">История</span></div>
+        <div style={{ padding: 12 }}>
+          <HistoryFeed entityKind="procedure" entityId={proc.id} />
+        </div>
+      </div>
     </div>
   )
 }

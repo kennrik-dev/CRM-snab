@@ -3,6 +3,8 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Chip } from '../components/Chip'
 import { EmptyState } from '../components/EmptyState'
+import { CommentFeed } from '../components/CommentFeed'
+import { HistoryFeed } from '../components/HistoryFeed'
 import {
   PositionTable,
   type PositionTableColumn,
@@ -738,10 +740,7 @@ export function ProcedureCard() {
           >
             Комментарии
           </div>
-          <EmptyState
-            title="Комментариев пока нет"
-            hint="Лента комментариев появится в Фазе 10."
-          />
+          <CommentFeed targetKind="procedure" targetId={proc.id} />
         </div>
 
         <div style={{ padding: '0 22px 22px' }}>
@@ -757,7 +756,7 @@ export function ProcedureCard() {
           >
             История
           </div>
-          <EmptyState title="Пусто" hint="Журнал действий появится в Фазе 10." />
+          <HistoryFeed entityKind="procedure" entityId={proc.id} />
         </div>
       </div>
 
