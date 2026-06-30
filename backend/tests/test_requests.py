@@ -1331,7 +1331,7 @@ def test_take_to_work_audit_written(client_admin, db_seeded):
     rows = (
         db_seeded.query(AuditLog)
         .filter_by(
-            entity_kind="parent_request",
+            entity_kind="parent",
             entity_id=body["id"],
             action="take_to_work",
         )
@@ -1399,3 +1399,50 @@ def test_archived_view_shows_cancelled_but_not_taken_to_work(client_admin):
     assert "REG-B" not in archived  # the reported bug — was leaking in
     assert "REG-C" in archived
     assert "REG-D" in archived
+
+
+def test_take_to_work_audits_as_parent_kind(client_admin, db_seeded):
+    """Regression (Phase 10 B4): take-to-work must audit entity_kind='parent'
+    (was 'parent_request') so /history?entity_kind=parent and the dashboard
+    phrase (calculations._AUDIT_PHRASES) both resolve."""
+    from app.models import AuditLog, ParentRequest
+
+    parent = ParentRequest(code="Т-АУД", title="T", sostavitel="S")
+    db_seeded.add(parent)
+    db_seeded.commit()
+    db_seeded.refresh(parent)
+
+    r = client_admin.post(f"/requests/{parent.id}/take-to-work")
+    assert r.status_code == 200, r.text
+
+    db_seeded.expire_all()
+    rows = db_seeded.query(AuditLog).filter_by(entity_id=parent.id).all()
+    assert rows, "expected an audit row for the parent"
+    assert all(row.entity_kind == "parent" for row in rows), (
+        f"expected entity_kind='parent', got {[r.entity_kind for r in rows]}"
+    )
+
+
+def test_take_to_work_phrase_key_is_parent_kind():
+    """Regression (Phase 10 B4): the dashboard feed derives action_label via
+    calculations._AUDIT_PHRASES.get((entity_kind, action)) using the RAW
+    entity_kind. After the requests.py fix, take-to-work audits as
+    entity_kind='parent', so the dict MUST key on ('parent','take_to_work')
+    — otherwise the feed shows raw 'take_to_work' instead of the phrase.
+
+    Asserting the dict structure directly (rather than via /dashboard) keeps
+    this RED against the unfixed code: pre-fix the audit kind and dict key are
+    *both* 'parent_request' (consistent → phrase would resolve), so an
+    integration check would false-green. The structural check fails regardless
+    of which side you fix first."""
+    from app.calculations import _AUDIT_PHRASES
+
+    assert ("parent", "take_to_work") in _AUDIT_PHRASES, (
+        "missing ('parent','take_to_work') phrase — dashboard feed would show "
+        "raw 'take_to_work' for the take-to-work event"
+    )
+    assert _AUDIT_PHRASES[("parent", "take_to_work")] == "взял(а) в работу заявку"
+    assert ("parent_request", "take_to_work") not in _AUDIT_PHRASES, (
+        "stale 'parent_request' key must be removed — it is never produced after "
+        "the requests.py fix and would mask a missing 'parent' key in dev"
+    )

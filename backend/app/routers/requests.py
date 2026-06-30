@@ -740,7 +740,7 @@ def take_to_work(
     # Audit on the parent_request.
     write_audit(
         db,
-        entity_kind="parent_request",
+        entity_kind="parent",
         entity_id=parent.id,
         user=current_user,
         action="take_to_work",

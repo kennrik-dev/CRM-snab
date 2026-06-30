@@ -204,7 +204,7 @@ _AUDIT_PHRASES = {
     ("parent", "uncancel"): "восстановил(а) заявку",
     ("parent", "duplicate"): "скопировал(а) заявку",
     ("parent", "positions_add"): "добавил(а) позиции в заявку",
-    ("parent_request", "take_to_work"): "взял(а) в работу заявку",
+    ("parent", "take_to_work"): "взял(а) в работу заявку",
     ("position", "position_update"): "изменил(а) позицию",
     ("position", "position_delete"): "удалил(а) позицию",
     ("procedure", "split"): "разбил(а) по поставщикам процедуру",
