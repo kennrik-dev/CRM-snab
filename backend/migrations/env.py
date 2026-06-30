@@ -1,9 +1,11 @@
 from logging.config import fileConfig
+from pathlib import Path
 
 from sqlalchemy import create_engine, event, engine_from_config, pool
 
 from alembic import context
 
+from app.backup import run_backup
 from app.config import settings
 from app.db import Base
 from app import models  # noqa: register models on Base.metadata
@@ -71,6 +73,10 @@ def run_migrations_online() -> None:
     )
 
     event.listen(connectable, "connect", _fk_pragma_on_connect)
+
+    # §3: обязательный бэкап перед миграциями. Кладём рядом с crm.db/backups.
+    _backup_dir = str(Path(settings.DB_PATH).resolve().parent / "backups")
+    run_backup(settings.DB_PATH, _backup_dir, keep=14)
 
     with connectable.connect() as connection:
         context.configure(
