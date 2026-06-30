@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { useAuth } from '../auth/AuthContext'
@@ -50,6 +50,15 @@ function SearchDropdown({
       {sub && <span className="sg-s">{sub}</span>}
     </button>
   )
+  const Group = ({ title, children }: { title: string; children: ReactNode }) => {
+    if (!children || (Array.isArray(children) && children.length === 0)) return null
+    return (
+      <div className="sg">
+        <div className="sg-h">{title}</div>
+        {children}
+      </div>
+    )
+  }
   const empty =
     results.parents.length + results.procedures.length + results.suppliers.length +
       results.tenders.length + results.payments.length ===
@@ -57,21 +66,41 @@ function SearchDropdown({
   if (empty) return <div className="sg-empty">Ничего не найдено</div>
   return (
     <div className="sg-wrap">
-      {results.parents.map((p) => (
-        <Row key={`p${p.id}`} label={p.code} sub={p.title} route={`/komplektaciya/${p.id}`} />
-      ))}
-      {results.procedures.map((p) => (
-        <Row key={`pr${p.id}`} label={p.proc ?? `#${p.id}`} sub={p.supplier ?? undefined} route={procRoute(p.block, p.id)} />
-      ))}
-      {results.tenders.map((t) => (
-        <Row key={`t${t.id}`} label={t.num} sub={t.parent_code} route={`/komplektaciya/${t.parent_id}`} />
-      ))}
-      {results.payments.map((pm) => (
-        <Row key={`pm${pm.id}`} label={pm.upd} sub={pm.supplier ?? undefined} route={`/oplaty/${pm.id}`} />
-      ))}
-      {results.suppliers.map((s) => (
-        <Row key={`s${s.id}`} label={s.name} sub={`${s.proc_count} процедур`} route={null} />
-      ))}
+      {results.parents.length > 0 && (
+        <Group title="Заявки">
+          {results.parents.map((p) => (
+            <Row key={`p${p.id}`} label={p.code} sub={p.title} route={`/komplektaciya/${p.id}`} />
+          ))}
+        </Group>
+      )}
+      {results.procedures.length > 0 && (
+        <Group title="Процедуры">
+          {results.procedures.map((p) => (
+            <Row key={`pr${p.id}`} label={p.proc ?? `#${p.id}`} sub={p.supplier ?? undefined} route={procRoute(p.block, p.id)} />
+          ))}
+        </Group>
+      )}
+      {results.tenders.length > 0 && (
+        <Group title="Торги">
+          {results.tenders.map((t) => (
+            <Row key={`t${t.id}`} label={t.num} sub={t.parent_code} route={`/komplektaciya/${t.parent_id}`} />
+          ))}
+        </Group>
+      )}
+      {results.payments.length > 0 && (
+        <Group title="УПД">
+          {results.payments.map((pm) => (
+            <Row key={`pm${pm.id}`} label={pm.upd} sub={pm.supplier ?? undefined} route={`/oplaty/${pm.id}`} />
+          ))}
+        </Group>
+      )}
+      {results.suppliers.length > 0 && (
+        <Group title="Поставщики">
+          {results.suppliers.map((s) => (
+            <Row key={`s${s.id}`} label={s.name} sub={`${s.proc_count} процедур`} route={null} />
+          ))}
+        </Group>
+      )}
     </div>
   )
 }
