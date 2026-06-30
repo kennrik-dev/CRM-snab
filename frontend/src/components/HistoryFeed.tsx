@@ -31,7 +31,7 @@ export function HistoryFeed({
           <div className="fitem" key={e.id}>
             <span className="ft2">{relTime(e.created_at)}</span>
             <div>
-              <b>{actorLabel(e.actor)}</b> <span>{e.action}</span>
+              <b>{actorLabel(e.actor)}</b> <span>{e.action_label}</span>
             </div>
           </div>
         ))

@@ -3,7 +3,7 @@ import { buildQuery } from './support'
 
 // Зеркало GET /history (Phase 10 B3). actor = User.full_name | 'Система' (BE).
 
-export type AuditEntry = { id: number; action: string; actor: string; created_at: string }
+export type AuditEntry = { id: number; action: string; action_label: string; actor: string; created_at: string }
 export type HistoryList = { items: AuditEntry[]; total: number }
 
 export function listHistory(
