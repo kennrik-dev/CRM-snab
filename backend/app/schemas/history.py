@@ -9,6 +9,7 @@ class AuditEntryOut(BaseModel):
 
     id: int
     action: str
+    action_label: str
     actor: str
     created_at: str
 

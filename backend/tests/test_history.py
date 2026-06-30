@@ -105,3 +105,22 @@ def test_history_accepts_arbitrary_entity_kind(client_admin, db_seeded):
 
 def test_history_unauthenticated_401(client_seeded):
     assert client_seeded.get("/history?entity_kind=procedure&entity_id=1").status_code == 401
+
+
+def test_history_action_label_translated_and_fallback(client_admin, db_seeded):
+    """Phase 10 F7 fix: /history returns action_label (Russian) from
+    _AUDIT_PHRASES, falling back to the raw action when unmapped."""
+    u = _admin_user(db_seeded)
+    # (procedure, split) is a mapped snake_case action → Russian phrase
+    write_audit(db_seeded, "procedure", 11, u, "split")
+    # unknown action → fallback to raw
+    write_audit(db_seeded, "procedure", 11, u, "some_unknown_action")
+    # already-Russian action → fallback to itself
+    write_audit(db_seeded, "procedure", 11, u, "Добавлен комментарий")
+    body = client_admin.get("/history?entity_kind=procedure&entity_id=11").json()
+    labels = {a["action"]: a["action_label"] for a in body["items"]}
+    assert labels["split"] == "разбил(а) по поставщикам процедуру", labels
+    assert labels["some_unknown_action"] == "some_unknown_action"
+    assert labels["Добавлен комментарий"] == "Добавлен комментарий"
+    # raw action still present (spec R8)
+    assert all("action" in a and "action_label" in a for a in body["items"])

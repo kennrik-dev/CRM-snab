@@ -226,6 +226,14 @@ _AUDIT_PHRASES = {
 }
 
 
+def audit_phrase(entity_kind: str, action: str) -> str:
+    """Human-readable Russian phrase for an audit (entity_kind, action).
+    Falls back to the raw action when no phrase is mapped (e.g. already-Russian
+    actions like 'Добавлен комментарий', or unknown codes). Single source of
+    truth — used by the dashboard feed and /history."""
+    return _AUDIT_PHRASES.get((entity_kind, action), action)
+
+
 def _fmt_money(kopecks: int) -> str:
     """ru-RU '1 500 ₽' / '1 500,5 ₽' / '12 345,67 ₽' (NBSP thousands, ',' decimal)."""
     rub = (kopecks or 0) / 100
@@ -578,7 +586,7 @@ def _dash_feed(db) -> list:
         tk = _TARGET_KIND.get(kind)
         out.append({
             "actor": full_name or "Система",
-            "action_label": _AUDIT_PHRASES.get((kind, log.action), log.action),
+            "action_label": audit_phrase(kind, log.action),
             "entity_display": display,
             "target": {"kind": tk, "id": log.entity_id} if tk else None,
             "created_at": log.created_at,

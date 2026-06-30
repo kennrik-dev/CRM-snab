@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.audit import paginate
+from app.calculations import audit_phrase
 from app.db import get_db
 from app.dependencies import require_password_changed
 from app.models import AuditLog, User
@@ -45,6 +46,7 @@ def list_history(
         AuditEntryOut(
             id=row.id,
             action=row.action,
+            action_label=audit_phrase(row.entity_kind, row.action),
             actor=names.get(row.user_id, "Система"),
             created_at=row.created_at,
         )
