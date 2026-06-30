@@ -41,13 +41,17 @@ export function CommentFeed({
       createComment({ target_kind: targetKind, target_id: targetId, text: t }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['comments', targetKind, targetId] })
+      qc.invalidateQueries({ queryKey: ['history', targetKind, targetId] })
       setText('')
     },
   })
 
   const delMut = useMutation({
     mutationFn: (id: number) => deleteComment(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['comments', targetKind, targetId] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['comments', targetKind, targetId] })
+      qc.invalidateQueries({ queryKey: ['history', targetKind, targetId] })
+    },
   })
 
   const items = q.data?.items ?? []
