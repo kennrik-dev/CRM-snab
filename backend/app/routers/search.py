@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.dependencies import require_password_changed
-from app.models import ParentRequest, Procedure, User
+from app.models import ParentRequest, Procedure, Tender, UpdPayment, User
 
 router = APIRouter(tags=["search"])
 
@@ -36,21 +36,15 @@ def global_search(
     db: Session = Depends(get_db),
     _user: User = Depends(require_password_changed),
 ):
-    empty = {"parents": [], "procedures": [], "suppliers": []}
+    empty = {"parents": [], "procedures": [], "suppliers": [], "tenders": [], "payments": []}
 
     q_stripped = q.strip()
     if not q_stripped:
         return empty
 
-    # Casefold once in Python; py_casefold is applied to the column in SQL.
-    # Both sides end up in the same canonical form, so instr() can do a
-    # plain substring search. (LIKE would also work but requires escaping
-    # % and _ in q; instr() sidesteps that.)
     q_cf = q_stripped.casefold()
 
-    # ------------------------------------------------------------------
-    # parents — match code OR title (case-insensitive Unicode)
-    # ------------------------------------------------------------------
+    # parents — code OR title
     code_match = func.instr(func.py_casefold(ParentRequest.code), q_cf) > 0
     title_match = func.instr(func.py_casefold(ParentRequest.title), q_cf) > 0
     parents = (
@@ -61,15 +55,14 @@ def global_search(
         .all()
     )
 
-    # ------------------------------------------------------------------
-    # procedures — proc IS NOT NULL AND proc matches (case-insensitive Unicode)
-    # ------------------------------------------------------------------
+    # procedures — proc IS NOT NULL AND matches; include block for FE routing
     procedures = (
         db.query(
             Procedure.id,
             Procedure.proc,
             Procedure.supplier,
             Procedure.tender_id,
+            Procedure.block,
         )
         .filter(Procedure.proc.isnot(None))
         .filter(func.instr(func.py_casefold(Procedure.proc), q_cf) > 0)
@@ -78,11 +71,7 @@ def global_search(
         .all()
     )
 
-    # ------------------------------------------------------------------
-    # suppliers — distinct suppliers whose name matches (case-insensitive Unicode)
-    # Excludes NULL suppliers. Ordered by proc_count DESC, name ASC.
-    # `id` is the min(procedure.id) for the group — a stable representative.
-    # ------------------------------------------------------------------
+    # suppliers — distinct, with proc_count (id = min(procedure.id) representative)
     supplier_rows = (
         db.query(
             func.min(Procedure.id).label("id"),
@@ -97,6 +86,31 @@ def global_search(
         .all()
     )
 
+    # tenders — № заявки (Tender.num); join parent for code → FE nav target
+    tenders = (
+        db.query(
+            Tender.id,
+            Tender.num,
+            Tender.parent_id,
+            ParentRequest.code.label("parent_code"),
+        )
+        .join(ParentRequest, Tender.parent_id == ParentRequest.id)
+        .filter(Tender.num.isnot(None))
+        .filter(func.instr(func.py_casefold(Tender.num), q_cf) > 0)
+        .order_by(Tender.id.desc())
+        .limit(limit)
+        .all()
+    )
+
+    # payments — № УПД (UpdPayment.upd, NOT NULL)
+    payments = (
+        db.query(UpdPayment.id, UpdPayment.upd, UpdPayment.supplier)
+        .filter(func.instr(func.py_casefold(UpdPayment.upd), q_cf) > 0)
+        .order_by(UpdPayment.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+
     return {
         "parents": [
             {"id": p.id, "code": p.code, "title": p.title} for p in parents
@@ -107,11 +121,25 @@ def global_search(
                 "proc": pr.proc,
                 "supplier": pr.supplier,
                 "tender_id": pr.tender_id,
+                "block": pr.block,
             }
             for pr in procedures
         ],
         "suppliers": [
             {"id": s.id, "name": s.name, "proc_count": s.proc_count}
             for s in supplier_rows
+        ],
+        "tenders": [
+            {
+                "id": t.id,
+                "num": t.num,
+                "parent_id": t.parent_id,
+                "parent_code": t.parent_code,
+            }
+            for t in tenders
+        ],
+        "payments": [
+            {"id": pm.id, "upd": pm.upd, "supplier": pm.supplier}
+            for pm in payments
         ],
     }

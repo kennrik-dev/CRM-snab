@@ -159,6 +159,15 @@ def _make_procedure(
     return p
 
 
+def _make_upd_payment(db, upd: str, supplier: str | None = None):
+    from app.models import UpdPayment
+    p = UpdPayment(upd=upd, origin="manual", supplier=supplier, amount=0, pay_status="await")
+    db.add(p)
+    db.commit()
+    db.refresh(p)
+    return p
+
+
 # ---------------------------------------------------------------------------
 # /search — empty q
 # ---------------------------------------------------------------------------
@@ -173,14 +182,14 @@ def test_search_empty_q_returns_empty_groups_without_db_calls(client_admin, db_s
     r = client_admin.get("/search?q=")
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body == {"parents": [], "procedures": [], "suppliers": []}
+    assert body == {"parents": [], "procedures": [], "suppliers": [], "tenders": [], "payments": []}
 
 
 def test_search_whitespace_q_returns_empty_groups(client_admin):
     r = client_admin.get("/search?q=%20%20%20")
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body == {"parents": [], "procedures": [], "suppliers": []}
+    assert body == {"parents": [], "procedures": [], "suppliers": [], "tenders": [], "payments": []}
 
 
 # ---------------------------------------------------------------------------
@@ -191,7 +200,7 @@ def test_search_no_data_returns_empty_groups(client_admin):
     r = client_admin.get("/search?q=anything")
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body == {"parents": [], "procedures": [], "suppliers": []}
+    assert body == {"parents": [], "procedures": [], "suppliers": [], "tenders": [], "payments": []}
 
 
 # ---------------------------------------------------------------------------
@@ -356,7 +365,7 @@ def test_search_no_match_returns_empty_groups(client_admin, db_seeded):
 
     r = client_admin.get("/search?q=ZZZ")
     assert r.status_code == 200, r.text
-    assert r.json() == {"parents": [], "procedures": [], "suppliers": []}
+    assert r.json() == {"parents": [], "procedures": [], "suppliers": [], "tenders": [], "payments": []}
 
 
 # ---------------------------------------------------------------------------
@@ -410,3 +419,60 @@ def test_search_unauthenticated_returns_401(client_seeded):
 def test_search_must_change_password_returns_403(client_must_change):
     r = client_must_change.get("/search?q=foo")
     assert r.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# /search — tenders (№ заявки = Tender.num)
+# ---------------------------------------------------------------------------
+
+def test_search_tender_num_match(client_admin, db_seeded):
+    parent = _make_parent(db_seeded, code="Т-10", title="T")
+    _make_tender(db_seeded, num="З-1488", parent_id=parent.id)
+
+    r = client_admin.get("/search?q=1488")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert len(body["tenders"]) == 1
+    t = body["tenders"][0]
+    assert set(t.keys()) >= {"id", "num", "parent_id", "parent_code"}
+    assert t["num"] == "З-1488"
+    assert t["parent_id"] == parent.id
+    assert t["parent_code"] == "Т-10"
+
+
+def test_search_tender_num_match_case_insensitive_cyrillic(client_admin, db_seeded):
+    parent = _make_parent(db_seeded, code="Т-11", title="T")
+    _make_tender(db_seeded, num="Заявка-А", parent_id=parent.id)
+
+    r = client_admin.get("/search?q=заявка")
+    assert r.status_code == 200, r.text
+    assert len(r.json()["tenders"]) == 1
+
+
+# ---------------------------------------------------------------------------
+# /search — payments (№ УПД = UpdPayment.upd)
+# ---------------------------------------------------------------------------
+
+def test_search_payment_upd_match(client_admin, db_seeded):
+    _make_upd_payment(db_seeded, upd="УПД-777", supplier="ООО Ромашка")
+
+    r = client_admin.get("/search?q=777")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert len(body["payments"]) == 1
+    pm = body["payments"][0]
+    assert set(pm.keys()) >= {"id", "upd", "supplier"}
+    assert pm["upd"] == "УПД-777"
+    assert pm["supplier"] == "ООО Ромашка"
+
+
+def test_search_procedures_now_include_block(client_admin, db_seeded):
+    parent = _make_parent(db_seeded, code="B-1", title="B")
+    tender = _make_tender(db_seeded, num="B-1", parent_id=parent.id)
+    _make_procedure(db_seeded, tender_id=tender.id, proc="PR-1", supplier="S")
+
+    r = client_admin.get("/search?q=PR-1")
+    assert r.status_code == 200, r.text
+    p = r.json()["procedures"][0]
+    assert "block" in p
+    assert p["block"] == "zakupka"
