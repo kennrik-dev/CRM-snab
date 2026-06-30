@@ -69,3 +69,21 @@ describe('num', () => {
     expect(num(undefined)).toBe('—')
   })
 })
+
+// Exact spec literals (docs/33 §1): "1 234 567 ₽", ДД.ММ.ГГ, comma decimal.
+describe('spec literals (Phase 10 F6)', () => {
+  it('money: 123456700 kop → "1 234 567 ₽" (NBSP thousands, no decimals)', () => {
+    const out = money(123456700) // = 1 234 567.00 ₽
+    expect(out).toMatch(/1\s234\s567/)
+    expect(out).toContain('₽')
+    expect(out).not.toContain(',')
+  })
+
+  it('dateRu: "2026-06-30" → "30.06.26" (ДД.ММ.ГГ)', () => {
+    expect(dateRu('2026-06-30')).toBe('30.06.26')
+  })
+
+  it('num: 1234567.89 → "1 234 567,89" (NBSP thousands, comma decimal)', () => {
+    expect(num(1234567.89)).toMatch(/1\s234\s567,89/)
+  })
+})
