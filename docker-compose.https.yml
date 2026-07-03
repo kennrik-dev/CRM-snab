@@ -1,0 +1,32 @@
+# HTTPS overlay: adds Caddy (automatic Let's Encrypt) in front of nginx.
+#
+# The base docker-compose.yml serves HTTP on :80 (fine for testing by IP).
+# Use this overlay once you have a domain pointing at the server:
+#
+#   1. Edit Caddyfile -> set your domain.
+#   2. Confirm DNS resolves (dig crm.example.ru -> your server IP).
+#   3. docker compose -f docker-compose.yml -f docker-compose.https.yml up -d
+services:
+  web:
+    # nginx stops facing the internet directly; only Caddy does.
+    ports: !reset []
+    expose:
+      - "80"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"   # HTTP/3 (QUIC)
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - web
+
+volumes:
+  caddy-data:
+  caddy-config:

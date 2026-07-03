@@ -1,0 +1,11 @@
+# HTTPS via Caddy with automatic Let's Encrypt certificates.
+#
+# 1. Replace crm.example.ru with your real domain.
+# 2. Make sure the domain's A-record points at the server IP and DNS has
+#    propagated (Caddy needs to reach :80 to prove domain ownership).
+# 3. Start with the HTTPS overlay:
+#      docker compose -f docker-compose.yml -f docker-compose.https.yml up -d
+crm.example.ru {
+	encode gzip zstd
+	reverse_proxy web:80
+}
